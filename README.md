@@ -1,1 +1,127 @@
-# plugin-scm-sim
+# scm-sim
+
+A library plugin for [scmJS](https://github.com/scm-js/scm-js), the browser-based StarCraft 1 /
+Brood War map editor. It is the way from the editor to scm-sim, the game engine behind the
+site's play page at [scmjs.dev/play](https://scmjs.dev/play/).
+
+It adds one menu item, **Tools ▸ Test Map in Browser**, which plays the open map on the play
+page in a tab of its own. Everything else is for other plugins, which use it to:
+
+- **play a replay to its end** without showing it, and get back what happened: every unit
+  made, finished and lost, with where and when; each player's minerals, gas, supply,
+  workers and army through the game; what was researched; and where units stood;
+- **start a map** on the play page, in a browser tab.
+
+The plugin holds no engine. The engine is a separate program served beside the editor, and
+the plugin talks to it by message inside your browser. A replay or a map handed over is not
+stored and not sent anywhere.
+
+## Where it works
+
+Only where the editor is served beside the play page: at scmjs.dev, or on a stand-in for the
+site on your own machine. In the desktop app, or an editor hosted somewhere else, the service
+is there but says it is not present, and a plugin that uses it should fall back to what it
+can do without.
+
+The engine runs the game from your own copy of StarCraft. If the browser has none, give the
+site your game on the Game Data page. **Edit ▸ Preferences ▸ Plugins ▸ scm-sim** says
+whether the engine can run a game now.
+
+## Install
+
+In scmJS: **Plugins ▸ Manage Plugins…**, paste
+
+```
+https://github.com/scm-js/plugin-scm-sim
+```
+
+and press **Add**. A plugin that needs it names it in its own manifest, and the editor
+installs both together:
+
+```json
+{ "requires": ["github:scm-js/plugin-scm-sim"] }
+```
+
+## Use it from a plugin
+
+Copy [`contract.d.ts`](contract.d.ts) into your plugin and import it as types only.
+
+```ts
+import type { ScmSimService } from "./vendor/scm-sim";
+
+api.services.watch<ScmSimService>("scm-sim.engine", (sim) => {
+  if (!sim?.present) return;            // no engine beside this editor: do without
+  button.onclick = async () => {
+    const status = await sim.status();
+    if (!status.available) { api.ui.status(status.reason ?? ""); return; }
+    const timeline = await sim.analyse(replayBytes, {
+      onProgress: (p) => bar.set(p.frames ? p.frame / p.frames : 0),
+      signal: controller.signal,
+    });
+    // timeline.events, timeline.samples, timeline.positions
+  };
+});
+```
+
+### `status()`
+
+Asks the engine whether it can run a game now. `available` is false with a `reason` in words
+when the browser has no copy of StarCraft, or the engine's page did not answer.
+
+### `analyse(replay, options?)`
+
+`replay` is a whole `.rep` file. A twenty-minute game takes about ten to fifteen seconds. One
+replay runs at a time; further calls wait their turn. The engine uses about a gigabyte of
+memory while it runs and gives it back when the replay ends.
+
+The answer is a `ReplayTimeline`:
+
+| Field | What it holds |
+| --- | --- |
+| `events` | One entry each time a unit is `born`, `done` (finished), `morph`s into another type, is `given` to another player, or `died`. Each has the frame, the unit's number, its type, owner and place in pixels. |
+| `research` | Upgrades and technologies as they finish, per player. |
+| `samples` | Every 48 frames by default (two seconds at Fastest): each player's minerals, gas, supply used and available, finished workers, army size, army cost and finished buildings. |
+| `positions` | At the same frames, where every unit stood. Buildings and units inside a transport or bunker are left out. Typed arrays; `start[i]` to `start[i + 1]` are the rows of sample `i`. |
+| `players`, `map`, `frames`, `total`, `ended` | The players as the replay names them, the map's size in tiles, how far the game was played and how it stopped. |
+
+A unit's number is the timeline's own, counted from 0 in the order units appear, and stays
+with the unit for its whole life. Things to know when reading the events:
+
+- A Zerg unit is a chain of morphs: a larva is born, morphs into an egg, the egg morphs into
+  the unit, and then it is done. A drone morphs into the building it becomes.
+- A refinery, extractor or assimilator is a morph of the geyser it stands on.
+- A player who leaves gives every unit to a neutral player; these are `given` events, not
+  deaths.
+- The timeline does not say who killed a unit.
+
+`sampleEvery` and `positionsEvery` change the two intervals; `positionsEvery: 0` leaves the
+positions out.
+
+### `play(map?)`
+
+Starts a map on the play page in a tab of its own; the next call uses the same tab. Leave
+`map` out to play the open map as Save would write it. Call it from the click that asks for
+it, because a browser only lets a click open a tab. It resolves when the game is on the page.
+
+## Replays it can play
+
+The engine runs StarCraft 1.16.1's own game code and reads the replay file itself. Replays
+written by 1.16.1 are what it has been run on. Replays written by 1.18 and later, including
+StarCraft: Remastered, have not been tried yet.
+
+## Development
+
+```
+npm install
+npm run typecheck
+npm test
+npm run build      # dist/plugin.js, the bundle the editor loads
+```
+
+The conversation with the engine's pages is written at the top of `src/bridge.ts` (replay
+analysis) and `src/play.ts` (playing a map). The timeline types in `contract.d.ts` are a copy
+of the engine's own; `ReplayTimeline.version` says which form a timeline has.
+
+## License
+
+MIT. The engine itself is not part of this repository.
