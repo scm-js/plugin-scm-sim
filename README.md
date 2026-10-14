@@ -78,7 +78,7 @@ The answer is a `ReplayTimeline`:
 
 | Field | What it holds |
 | --- | --- |
-| `events` | One entry each time a unit is `born`, `done` (finished), `morph`s into another type, is `given` to another player, or `died`. Each has the frame, the unit's number, its type, owner and place in pixels. |
+| `events` | One entry each time a unit is `born`, `done` (finished), `morph`s into another type, is `given` to another player, or `died`. Each has the frame, the unit's number, its type, owner and place in pixels. A `died` event also names the unit credited with the kill (`by`, `byType`, `byOwner`, `byX`, `byY`) where the game credited one. |
 | `research` | Upgrades and technologies as they finish, per player. |
 | `samples` | Every 48 frames by default (two seconds at Fastest): each player's minerals, gas, supply used and available, finished workers, army size, army cost and finished buildings. |
 | `positions` | At the same frames, where every unit stood. Buildings and units inside a transport or bunker are left out. Typed arrays; `start[i]` to `start[i + 1]` are the rows of sample `i`. |
@@ -92,7 +92,10 @@ with the unit for its whole life. Things to know when reading the events:
 - A refinery, extractor or assimilator is a morph of the geyser it stands on.
 - A player who leaves gives every unit to a neutral player; these are `given` events, not
   deaths.
-- The timeline does not say who killed a unit.
+- A kill is the game's own credit: a reaver gets its scarab's kills, a carrier its
+  interceptors'. Scarabs and spider mines that go off are deaths with no killer, and so is
+  what a spider mine killed. When several units fall in the same instant the pairing of
+  killer and victim is the likeliest one, not a certain one.
 
 `sampleEvery` and `positionsEvery` change the two intervals; `positionsEvery: 0` leaves the
 positions out.
