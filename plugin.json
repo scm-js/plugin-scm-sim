@@ -1,7 +1,7 @@
 {
   "name": "scm-sim",
   "id": "scm-sim",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A library that lets other plugins use the site's game engine, the one behind scmjs.dev/play: play a replay to its end and get back what happened in it (every unit made, finished and lost, each player's resources, supply and army through the game, where units stood), or start a map in a browser tab. It also adds Tools ▸ Test Map in Browser. It holds no engine itself and works where the editor is served beside the play page.",
   "author": "Jeany",
   "homepage": "https://github.com/scm-js/plugin-scm-sim",
