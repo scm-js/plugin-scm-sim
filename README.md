@@ -83,6 +83,7 @@ The answer is a `ReplayTimeline`:
 | `samples` | Every 48 frames by default (two seconds at Fastest): each player's minerals, gas, supply used and available, finished workers, army size, army cost and finished buildings. |
 | `positions` | At the same frames, where every unit stood. Buildings and units inside a transport or bunker are left out. Typed arrays; `start[i]` to `start[i + 1]` are the rows of sample `i`. |
 | `players`, `map`, `frames`, `total`, `ended` | The players as the replay names them, the map's size in tiles, how far the game was played and how it stopped. |
+| `check` | Whether the game the engine played stayed the game in the replay. `parted` is null when it did, else the frame from which the timeline is no longer what happened. See below. |
 
 A unit's number is the timeline's own, counted from 0 in the order units appear, and stays
 with the unit for its whole life. Things to know when reading the events:
@@ -108,9 +109,27 @@ it, because a browser only lets a click open a tab. It resolves when the game is
 
 ## Replays it can play
 
-The engine runs StarCraft 1.16.1's own game code and reads the replay file itself. Replays
-written by 1.16.1 are what it has been run on. Replays written by 1.18 and later, including
-StarCraft: Remastered, have not been tried yet.
+The engine runs StarCraft 1.16.1's own game code. A replay written by 1.16.1 is given to it
+as it is. A replay written by 1.18 or StarCraft: Remastered is first rewritten in 1.16.1's
+form, inside the browser, and then played the same way.
+
+Two kinds of Remastered game cannot be played, and `analyse` rejects with a message that
+says which:
+
+- **A map on Remastered's terrain, with a copy of StarCraft from 1.16.1.** Remastered added
+  tiles to seven of the eight tilesets and its ladder maps use them. The game needs the
+  tilesets the map was made for, so such a replay plays only when the copy of StarCraft in
+  the browser was made from a Remastered installation.
+- **A game that held more than 1,700 units at once.** Remastered raised that limit and
+  1.16.1's game has no room for the rest.
+
+A replay has no record of the game to compare against, only the players' commands. So the
+engine checks each command as it runs: a command names the unit it is for, and a command
+for a unit the game has not made yet means the game being played is no longer the one that
+was recorded. `check.parted` is the frame of the first such command, or null. It has been
+null to the last frame in every 1.16.1 and Remastered replay tried so far. If a game passes
+one of 1.16.1's other limits (100 bullets in the air, 2,500 sprites), Remastered's game and
+this one go different ways from there, and `parted` is how that shows.
 
 ## Development
 
