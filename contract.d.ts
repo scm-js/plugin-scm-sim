@@ -176,7 +176,9 @@ export interface ScmSimService {
    * Starts a map on the play page, in a tab of its own (one tab, used again by the next
    * call). `map` is a whole .scm / .scx file; left out, the open map as Save would write
    * it. Call it from the click that asks for it: a browser only lets a click open a tab.
-   * Resolves when the game is on the page.
+   * It is played as the plugin's Preferences page says (the kind of game, the race, the
+   * slot, melee computers). Resolves when the game is on the page, or, where the page says
+   * to choose on the play page, when the map is on its setup screen.
    */
   play(map?: { bytes: Uint8Array; name: string }): Promise<void>;
 }

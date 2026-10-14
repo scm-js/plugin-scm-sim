@@ -3,25 +3,31 @@
  * tab of its own:
  *
  *   ← `{ type: "scmjs.play.ready" }`                       the play page, each time it loads
- *   → `{ type: "scmjs.play", map, name, useMapSettings }`  a whole .scm / .scx file
- *   ← `{ type: "scmjs.play.started" }` / `{ type: "scmjs.play.error", message }`
+ *   → `{ type: "scmjs.play", map, name, useMapSettings, race, slot?, computers, setup }`
+ *                                                         a whole .scm / .scx file, and how to play it (`src/settings.ts`)
+ *   ← `{ type: "scmjs.play.started" }` / `{ type: "scmjs.play.shown" }` (on the setup screen) / `{ type: "scmjs.play.error", message }`
  *
  * "Ready" comes again when the play page starts over (a first visit takes the game's
  * files and reloads), and the map is handed over again each time, for as long as that
- * tab is open. Playing again sends the new map to the same tab.
+ * tab is open. Playing again sends the new map to the same tab. A play page from before the
+ * settings plays every map with its own settings and says "started".
  */
 import type { SimAddress } from "./address";
+import type { PlayHow } from "./settings";
 
 /** The window's name: one tab for playing, found again by the next call. (The scmjs.dev plugin's Test Map in Browser uses the same.) */
 const TAB = "scmjs-play";
+
+/** `started`: the game is on the page; `shown`: the map is on its setup screen. */
+export type PlayOutcome = "started" | "shown";
 
 export interface PlayWords { blocked: string; noMap: string; replaced: string }
 
 export class PlayTab {
   private tab: Window | null = null;
-  private map: { bytes: Uint8Array; name: string } | null = null;
+  private map: { bytes: Uint8Array; name: string; how: PlayHow } | null = null;
   private ready = false;
-  private waiting: { resolve(): void; reject(e: Error): void } | null = null;
+  private waiting: { resolve(outcome: PlayOutcome): void; reject(e: Error): void } | null = null;
   private readonly address: SimAddress;
   private readonly words: PlayWords;
   private readonly heard = (e: MessageEvent) => {
@@ -29,7 +35,7 @@ export class PlayTab {
     const m = e.data as { type?: unknown; message?: unknown } | null;
     if (!m || typeof m.type !== "string") return;
     if (m.type === "scmjs.play.ready") { this.ready = true; this.hand(); }
-    else if (m.type === "scmjs.play.started") { this.waiting?.resolve(); this.waiting = null; }
+    else if (m.type === "scmjs.play.started" || m.type === "scmjs.play.shown") { this.waiting?.resolve(m.type === "scmjs.play.shown" ? "shown" : "started"); this.waiting = null; }
     else if (m.type === "scmjs.play.error") { this.waiting?.reject(new Error(String(m.message ?? ""))); this.waiting = null; }
   };
 
@@ -41,20 +47,20 @@ export class PlayTab {
   private hand() {
     if (!this.tab || this.tab.closed || !this.map || !this.ready) return;
     // (A copy: the bytes stay here for the next time the tab asks.)
-    this.tab.postMessage({ type: "scmjs.play", map: this.map.bytes.slice(), name: this.map.name, useMapSettings: true }, this.address.origin);
+    this.tab.postMessage({ type: "scmjs.play", map: this.map.bytes.slice(), name: this.map.name, ...this.map.how }, this.address.origin);
   }
 
   /** `map`: the bytes, or a promise of them (the tab is opened before anything is awaited: a browser lets a click open a tab, not what follows it later). */
-  async play(map: { bytes: Uint8Array; name: string } | Promise<{ bytes: Uint8Array; name: string } | null>): Promise<void> {
+  async play(map: { bytes: Uint8Array; name: string } | Promise<{ bytes: Uint8Array; name: string } | null>, how: PlayHow): Promise<PlayOutcome> {
     const reuse = this.tab !== null && !this.tab.closed;
     if (!reuse) { this.ready = false; this.tab = window.open(this.address.play, TAB); }
     if (!this.tab) throw new Error(this.words.blocked);
     const got = await map;
     if (!got) throw new Error(this.words.noMap);
-    this.map = got;
+    this.map = { bytes: got.bytes, name: got.name, how };
     if (reuse) this.tab.focus();
     this.waiting?.reject(new Error(this.words.replaced));
-    const started = new Promise<void>((resolve, reject) => { this.waiting = { resolve, reject }; });
+    const started = new Promise<PlayOutcome>((resolve, reject) => { this.waiting = { resolve, reject }; });
     this.hand();
     return started;
   }
