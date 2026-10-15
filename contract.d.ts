@@ -185,6 +185,22 @@ export interface ViewedReplay {
   /** Whether a seek backwards is quick (the engine keeps moments of the game as it goes); otherwise it starts the game again. */
   rewinds: boolean;
   looks: ViewLooks;
+  /** Whether the page plays a camera track (`ScmSimView.follow`); a page from before tracks ignores one. */
+  follows: boolean;
+}
+
+/**
+ * Where the camera looks at each moment of the game, for `ScmSimView.follow`: the middle of the view, in map pixels, at
+ * every `every` frames. The page curves through the points by the frame it shows (a fraction of one too), and does not
+ * bend across a cut.
+ */
+export interface ViewTrack {
+  /** Frames between points: point `i` is at frame `i * every`. */
+  every: number;
+  x: Float32Array;
+  y: Float32Array;
+  /** 1 where the camera cuts to its point rather than moving to it from the point before. */
+  cut: Uint8Array;
 }
 
 export interface ViewOptions {
@@ -196,6 +212,8 @@ export interface ViewOptions {
   /** Remastered's pictures and its lighting, where the copy has them. The same choice as the play page's Options. */
   remastered?: boolean;
   lighting?: boolean;
+  /** The game's console under the map (off at first: the editor has the controls, and the map gets the whole height). */
+  console?: boolean;
 }
 
 /** The frame shown: at most ten times a second, and at once when playing or seeking changes. */
@@ -214,6 +232,69 @@ export interface ViewCamera {
   height: number;
   /** The person moved it (the minimap, the arrow keys), not `camera`. */
   byUser: boolean;
+}
+
+/**
+ * What the game's minimap draws, for a minimap of your own: per square its middle and size in
+ * map pixels (`boxes`, four numbers each) and its colour (`colours`, 0xRRGGBB) — the units seen
+ * through the fog when it is on (all of them without it), and what is remembered under it,
+ * dimmed; and the fog itself, to darken a minimap's ground the way the game's is. At most
+ * eight times a second, when the frame, the fog or the eyes changed.
+ */
+export interface ViewUnits {
+  frame: number;
+  boxes: Float32Array;
+  colours: Uint32Array;
+  /**
+   * Per tile, row by row, `wide` tiles a row: 0 never seen, 1 seen before (the game dims it), 2 seen
+   * now. Null with the fog off, and from a game page before scm-sim 0.6.0.
+   */
+  fog: Uint8Array | null;
+  wide: number;
+}
+
+/**
+ * The unit under the pointer, as the game's console would show it — for a tooltip of your own, as
+ * the view shows the game without its console. Only what the eyes the game is seen through can see.
+ */
+export interface ViewHoverUnit {
+  /** The engine's slot for it: the same unit while it lives. */
+  id: number;
+  /** units.dat id. */
+  type: number;
+  /** The player it belongs to, 0–11. */
+  owner: number;
+  hp: number;
+  hpMax: number;
+  /** A unit that cannot be hurt (its hit points are not shown in the game). */
+  invincible: boolean;
+  /** -1 for a unit with no shields. */
+  shields: number;
+  shieldsMax: number;
+  /** -1 for a unit that casts nothing. */
+  energy: number;
+  energyMax: number;
+  /** False while it goes up, trains or is an egg. */
+  completed: boolean;
+  /** What it is busy with, and `workId` what: the unit type made or morphed into, a techdata.dat or upgrades.dat id. */
+  work: "construction" | "train" | "research" | "upgrade" | "morph" | "addon" | "nuke" | null;
+  workId: number;
+  /** 0–100, how far that work (or its own building) has gone; -1 for none. */
+  progress: number;
+  /** The unit types in training, the first under way. */
+  queue: number[];
+  /** What is left in a mineral field, a geyser or a gas building; -1 for anything else. */
+  resources: number;
+}
+
+/**
+ * What the pointer is on over the view: a unit, and where the pointer is in the element's CSS
+ * pixels; null once it is on nothing. At most thirty times a second, when it or the pointer moved.
+ */
+export interface ViewHover {
+  unit: ViewHoverUnit;
+  x: number;
+  y: number;
 }
 
 /** A key pressed while the view had the keyboard that it does not use itself (all but the arrows, which scroll). */
@@ -241,13 +322,27 @@ export interface ScmSimView {
   speed(multiplier: number): void;
   /** Goes to `frame`, playing or paused as it was. */
   seek(frame: number): void;
-  /** Looks at this point of the map (pixels: the middle of the view). */
-  camera(x: number, y: number): void;
+  /**
+   * Looks at this point of the map (pixels: the middle of the view). With `height`, shows that
+   * much of the map top to bottom (pixels, 240 to 960; the game's own 480 at first), so the view
+   * can match another's scale — without the console only.
+   */
+  camera(x: number, y: number, height?: number): void;
+  /**
+   * Moves the camera along `track` by the game's clock, in the page's own drawing (smooth however fast the game
+   * plays, and in step with what it shows), until `camera`, another track or null, or the person moving the view
+   * (said as a camera `byUser`). Only where the replay loaded says `follows`.
+   */
+  follow(track: ViewTrack | null): void;
   /** Whose eyes the fog is drawn through. */
   player(slot: number): void;
   options(options: ViewOptions): Promise<ViewLooks>;
   onFrame(listener: (frame: ViewFrame) => void): Disposable;
   onCamera(listener: (camera: ViewCamera) => void): Disposable;
+  /** The squares for a minimap of your own, as the game's minimap draws them. */
+  onUnits(listener: (units: ViewUnits) => void): Disposable;
+  /** The unit under the pointer, for a tooltip; null once the pointer is on nothing (and when it leaves the view). From scm-sim 0.6.0. */
+  onHover(listener: (hover: ViewHover | null) => void): Disposable;
   /**
    * A key the view handed back. It is also pressed again on the editor's window, so the
    * editor's hotkeys and every plugin's act on it as if it had been pressed there.

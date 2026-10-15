@@ -142,6 +142,8 @@ var ViewBridge = class {
   frames = /* @__PURE__ */ new Set();
   cameras = /* @__PURE__ */ new Set();
   keys = /* @__PURE__ */ new Set();
+  units = /* @__PURE__ */ new Set();
+  hovers = /* @__PURE__ */ new Set();
   closed = false;
   constructor(url, element, host, words, readyMs = 3e4) {
     this.words = words;
@@ -170,7 +172,8 @@ var ViewBridge = class {
             players: Array.isArray(m.players) ? m.players.map((p) => ({ slot: Number(p.slot), name: String(p.name ?? ""), race: Number(p.race) })) : [],
             map: { width: Number(m.map?.width) || 0, height: Number(m.map?.height) || 0 },
             rewinds: m.rewinds === true,
-            looks: looksOf(m.looks ?? {})
+            looks: looksOf(m.looks ?? {}),
+            follows: m.follows === true
           });
           return;
         }
@@ -193,6 +196,19 @@ var ViewBridge = class {
         case "scmjs.view.camera": {
           const c = { x: Number(m.x) || 0, y: Number(m.y) || 0, width: Number(m.width) || 0, height: Number(m.height) || 0, byUser: m.byUser === true };
           for (const l of this.cameras) l(c);
+          return;
+        }
+        case "scmjs.view.units": {
+          if (!(m.boxes instanceof Float32Array) || !(m.colours instanceof Uint32Array) || m.boxes.length !== m.colours.length * 4) return;
+          const wide = Number(m.wide) || 0;
+          const fog = m.fog instanceof Uint8Array && wide > 0 && m.fog.length % wide === 0 ? m.fog : null;
+          const u = { frame: Number(m.frame) || 0, boxes: m.boxes, colours: m.colours, fog, wide: fog ? wide : 0 };
+          for (const l of this.units) l(u);
+          return;
+        }
+        case "scmjs.view.hover": {
+          const h = hoverOf(m);
+          for (const l of this.hovers) l(h);
           return;
         }
         case "scmjs.view.key": {
@@ -225,8 +241,12 @@ var ViewBridge = class {
   seek(frame) {
     this.tell({ type: "scmjs.view.seek", frame: Math.max(0, Math.floor(frame)) });
   }
-  camera(x, y) {
-    this.tell({ type: "scmjs.view.camera", x, y });
+  camera(x, y, height) {
+    this.tell(height !== void 0 && height > 0 ? { type: "scmjs.view.camera", x, y, height } : { type: "scmjs.view.camera", x, y });
+  }
+  // (Copies: the caller keeps its track.)
+  follow(track) {
+    this.tell({ type: "scmjs.view.follow", track: track && { every: track.every, x: track.x.slice(), y: track.y.slice(), cut: track.cut.slice() } });
   }
   player(slot) {
     this.tell({ type: "scmjs.view.player", slot });
@@ -253,6 +273,12 @@ var ViewBridge = class {
   onKey(listener) {
     return this.listen(this.keys, listener);
   }
+  onUnits(listener) {
+    return this.listen(this.units, listener);
+  }
+  onHover(listener) {
+    return this.listen(this.hovers, listener);
+  }
   dispose() {
     if (this.closed) return;
     this.closed = true;
@@ -262,6 +288,8 @@ var ViewBridge = class {
     this.frames.clear();
     this.cameras.clear();
     this.keys.clear();
+    this.units.clear();
+    this.hovers.clear();
     this.frame.remove();
   }
 };
@@ -289,6 +317,32 @@ function domViewFrames(origin) {
 function pressOnWindow(k) {
   if (typeof window === "undefined" || typeof KeyboardEvent === "undefined") return;
   window.dispatchEvent(new KeyboardEvent("keydown", { key: k.key, code: k.code, shiftKey: k.shiftKey, ctrlKey: k.ctrlKey, altKey: k.altKey, metaKey: k.metaKey, bubbles: true, cancelable: true }));
+}
+var WORKS = /* @__PURE__ */ new Set(["construction", "train", "research", "upgrade", "morph", "addon", "nuke"]);
+function hoverOf(m) {
+  const u = m.unit;
+  if (!u || typeof u !== "object") return null;
+  const n = (v, or = -1) => typeof v === "number" && Number.isFinite(v) ? v : or;
+  if (n(u.type) < 0) return null;
+  const unit = {
+    id: n(u.id),
+    type: n(u.type),
+    owner: n(u.owner, 0),
+    hp: n(u.hp, 0),
+    hpMax: n(u.hpMax, 0),
+    invincible: u.invincible === true,
+    shields: n(u.shields),
+    shieldsMax: n(u.shieldsMax, 0),
+    energy: n(u.energy),
+    energyMax: n(u.energyMax, 0),
+    completed: u.completed !== false,
+    work: typeof u.work === "string" && WORKS.has(u.work) ? u.work : null,
+    workId: n(u.workId),
+    progress: n(u.progress),
+    queue: Array.isArray(u.queue) ? u.queue.filter((t) => typeof t === "number" && t >= 0) : [],
+    resources: n(u.resources)
+  };
+  return { unit, x: n(m.x, 0), y: n(m.y, 0) };
 }
 
 // src/settings.ts

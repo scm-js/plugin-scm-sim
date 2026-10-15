@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ViewCamera, ViewFrame, ViewKey } from "../contract";
+import type { ViewCamera, ViewFrame, ViewHover, ViewKey, ViewUnits } from "../contract";
 import { ViewBridge, type ViewFrameHost } from "../src/view";
 
 const WORDS = { noAnswer: "no answer", noFiles: "no files", replaced: "replaced", closed: "closed" };
@@ -43,7 +43,12 @@ describe("the game view inside an element", () => {
     expect(page.sent[0].replay).toEqual(bytes);
     expect(page.sent[0].replay).not.toBe(bytes);
     page.say(LOADED);
-    expect(await loading).toEqual({ name: "a.rep", frames: 900, players: [{ slot: 0, name: "A", race: 1 }], map: { width: 128, height: 96 }, rewinds: true, looks: LOOKS });
+    expect(await loading).toEqual({ name: "a.rep", frames: 900, players: [{ slot: 0, name: "A", race: 1 }], map: { width: 128, height: 96 }, rewinds: true, looks: LOOKS, follows: false });
+    // (A page that plays camera tracks says so.)
+    const again = view.load(bytes, "a.rep");
+    await tick();
+    page.say({ ...LOADED, follows: true });
+    expect(await again).toMatchObject({ follows: true });
   });
 
   it("rejects a load the page could not play, one replaced by another, and one with no game files", async () => {
@@ -90,6 +95,55 @@ describe("the game view inside an element", () => {
     expect(frames).toEqual([{ frame: 240, playing: true, seeking: null }]);
     expect(cameras).toEqual([{ x: 10, y: 20, width: 640, height: 375, byUser: true }]);
     expect(keys).toEqual([{ key: " ", code: "Space", shiftKey: false, ctrlKey: false, altKey: false, metaKey: false }]);
+  });
+
+  it("asks for a scale with the camera, and passes the minimap's squares on", () => {
+    const { page, host } = fakeViewer();
+    const view = new ViewBridge("u", element, host, WORDS);
+    view.camera(100, 200, 960);
+    view.camera(100, 200, 0);
+    expect(page.sent).toEqual([{ type: "scmjs.view.camera", x: 100, y: 200, height: 960 }, { type: "scmjs.view.camera", x: 100, y: 200 }]);
+    const heard: ViewUnits[] = [];
+    view.onUnits((u) => heard.push(u));
+    const boxes = Float32Array.from([64, 96, 32, 32]), colours = Uint32Array.from([0xf40404]);
+    page.say({ type: "scmjs.view.units", frame: 0, boxes, colours });
+    // (Squares that do not add up are not passed on.)
+    page.say({ type: "scmjs.view.units", frame: 1, boxes: new Float32Array(3), colours });
+    page.say({ type: "scmjs.view.units", frame: 2, boxes: [64, 96, 32, 32], colours: [1] });
+    expect(heard).toEqual([{ frame: 0, boxes, colours, fog: null, wide: 0 }]);
+  });
+
+  it("passes the fog on with the squares, when it is whole rows of the map", () => {
+    const { page, host } = fakeViewer();
+    const view = new ViewBridge("u", element, host, WORDS);
+    const heard: ViewUnits[] = [];
+    view.onUnits((u) => heard.push(u));
+    const boxes = new Float32Array(0), colours = new Uint32Array(0), fog = Uint8Array.from([0, 1, 2, 2, 1, 0]);
+    page.say({ type: "scmjs.view.units", frame: 0, boxes, colours, fog, wide: 3 });
+    page.say({ type: "scmjs.view.units", frame: 1, boxes, colours, fog, wide: 4 });
+    expect(heard.map((u) => [u.fog, u.wide])).toEqual([[fog, 3], [null, 0]]);
+  });
+
+  it("passes on what is under the pointer, checked, and null for nothing", () => {
+    const { page, host } = fakeViewer();
+    const view = new ViewBridge("u", element, host, WORDS);
+    const heard: (ViewHover | null)[] = [];
+    view.onHover((h) => heard.push(h));
+    const unit = { id: 12, type: 111, owner: 1, hp: 500, hpMax: 1500, invincible: false, shields: -1, shieldsMax: 0, energy: -1, energyMax: 0, completed: true, work: "train", workId: 0, progress: 40, queue: [0, 0, 1], resources: -1 };
+    page.say({ type: "scmjs.view.hover", unit, x: 120, y: 80 });
+    page.say({ type: "scmjs.view.hover", unit: { ...unit, work: "dance", queue: [0, "x", -1] }, x: 1, y: 2 });
+    page.say({ type: "scmjs.view.hover", unit: null });
+    expect(heard).toEqual([{ unit, x: 120, y: 80 }, { unit: { ...unit, work: null, queue: [0] }, x: 1, y: 2 }, null]);
+  });
+
+  it("sends a camera track as a copy, and null to stop following", () => {
+    const { page, host } = fakeViewer();
+    const view = new ViewBridge("u", element, host, WORDS);
+    const track = { every: 2, x: Float32Array.from([10, 20]), y: Float32Array.from([30, 40]), cut: Uint8Array.from([1, 0]) };
+    view.follow(track);
+    view.follow(null);
+    expect(page.sent).toEqual([{ type: "scmjs.view.follow", track }, { type: "scmjs.view.follow", track: null }]);
+    expect((page.sent[0].track as typeof track).x).not.toBe(track.x);
   });
 
   it("takes the frame away on dispose, rejects what was waiting and says nothing more", async () => {
