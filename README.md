@@ -27,6 +27,21 @@ The engine runs the game from your own copy of StarCraft. If the browser has non
 site your game on the Game Data page. **Edit ▸ Preferences ▸ Plugins ▸ scm-sim** says
 whether the engine can run a game now.
 
+## Test Map in Browser
+
+**Tools ▸ Test Map in Browser** plays the open map on the play page, as Save would write it.
+Testing again sends the new version to the same tab. How it is played is set on the
+plugin's page under **Edit ▸ Preferences ▸ Plugins ▸ scm-sim**:
+
+| Setting | What it does |
+| --- | --- |
+| Game type | *From the map* (the default): Use Map Settings when the map has computer players or units placed beyond the start locations, melee otherwise. *Use Map Settings* or *Melee*: always that. *Choose on the play page*: the map opens on the play page's setup screen and nothing starts until Start Game there. |
+| Your race | Random, Terran, Protoss or Zerg. In Use Map Settings, only where the map leaves the race to the player. |
+| Your slot | Use Map Settings only: the first slot open to a person, or a player you name (when the map opens that slot to a person). |
+| Computers, Computer race | Melee only: how many computer players, up to the places the map has, and their race. |
+
+A play page from before these settings plays every map with its own settings.
+
 ## Install
 
 In scmJS: **Plugins ▸ Manage Plugins…**, paste
@@ -104,7 +119,9 @@ positions out.
 ### `play(map?)`
 
 Starts a map on the play page in a tab of its own; the next call uses the same tab. Leave
-`map` out to play the open map as Save would write it. Call it from the click that asks for
+`map` out to play the open map as Save would write it. It is played as the Preferences
+page says (above); with *Choose on the play page* it is put on the setup screen and
+resolves when it is shown there. Call it from the click that asks for
 it, because a browser only lets a click open a tab. It resolves when the game is on the page.
 
 ## Replays it can play

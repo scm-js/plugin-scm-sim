@@ -4,7 +4,8 @@
  * no editor of its own and no engine in it; it holds one service, `scm-sim.engine`, that
  * other plugins reach the engine through — a replay played to its end for what happened
  * in it, a map started in a browser tab — one menu item, Tools ▸ Test Map in Browser, and
- * a status page under Edit ▸ Preferences ▸ Plugins. The engine is another program on the editor's own origin, talked to by message
+ * a page under Edit ▸ Preferences ▸ Plugins: whether the engine can run a game, and how
+ * Test Map in Browser plays the map (`src/settings.ts`). The engine is another program on the editor's own origin, talked to by message
  * (`src/bridge.ts`, `src/play.ts`). See `contract.d.ts` for the service and README.md for
  * the rest.
  */
@@ -14,6 +15,7 @@ import { simAddress } from "./src/address";
 import { Bridge, domFrames } from "./src/bridge";
 import { registerPreferencesPage } from "./src/page";
 import { PlayTab } from "./src/play";
+import { playHow, readSettings, SETTINGS_KEY } from "./src/settings";
 import { KO } from "./ko";
 
 /** Marks a string the editor translates when it draws it (a menu label, a command's title), so the catalogue's test finds it. */
@@ -38,27 +40,31 @@ export function activate(api: PluginApi): () => void {
     replaced: t("Another map was started in its place."),
   });
 
+  const settings = () => readSettings(api.storage.get<unknown>(SETTINGS_KEY, null));
+  /** The map (left out: the open one, as Save would write it) played as the Preferences page says. */
+  const test = (map?: { bytes: Uint8Array; name: string }) => {
+    if (!tab) throw absent();
+    // Not awaited before the tab is opened: `play` opens it first.
+    const open = async () => { const file = await api.document.export({ format: "scx" }); return file ? { bytes: new Uint8Array(await file.arrayBuffer()), name: file.name } : null; };
+    return tab.play(map ?? open(), playHow(settings()));
+  };
+
   const service: ScmSimService = {
     present: address !== null,
     status: async () => bridge ? bridge.status() : { available: false, files: null, reason: absent().message, timeline: null },
     analyse: async (replay, options) => { if (!bridge) throw absent(); return bridge.analyse(replay, options); },
-    play: async (map) => {
-      if (!tab) throw absent();
-      // Not awaited before the tab is opened: `play` opens it first.
-      const open = async () => { const file = await api.document.export({ format: "scx" }); return file ? { bytes: new Uint8Array(await file.arrayBuffer()), name: file.name } : null; };
-      return tab.play(map ?? open());
-    },
+    play: async (map) => { await test(map); },
   };
   const provided = api.services.provide("engine", service, { version: SERVICE_VERSION });
-  const page = registerPreferencesPage(api, service);
+  const page = registerPreferencesPage(api, service, settings);
   // Tools ▸ Test Map in Browser, where there is a play page to hand the map to.
   const menu = address ? [
     api.commands.register({
       id: "play",
       title: msg("Test Map in Browser"),
       enabled: () => api.document.isOpen(),
-      run: () => service.play().then(
-        () => api.ui.status(t("The map is running on the play page.")),
+      run: () => test().then(
+        (outcome) => api.ui.status(outcome === "shown" ? t("The map is on the play page's setup screen.") : t("The map is running on the play page.")),
         (err) => api.ui.status(t("The play page could not start the map: {message}", { message: err instanceof Error ? err.message : String(err) })),
       ),
     }),

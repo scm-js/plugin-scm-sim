@@ -130,10 +130,39 @@ function domFrames(origin) {
   };
 }
 
+// src/settings.ts
+var DEFAULT_SETTINGS = { game: "map", race: 6, slot: -1, computers: 1, computerRace: 6 };
+var SETTINGS_KEY = "testMap";
+var RACES = [6, 1, 2, 0];
+var GAMES = ["map", "ums", "melee", "setup"];
+function readSettings(stored) {
+  const s = typeof stored === "object" && stored !== null ? stored : {};
+  const race = (v, fallback) => RACES.includes(v) ? v : fallback;
+  const whole = (v, min, max, fallback) => typeof v === "number" && Number.isInteger(v) && v >= min && v <= max ? v : fallback;
+  return {
+    game: GAMES.includes(s.game) ? s.game : DEFAULT_SETTINGS.game,
+    race: race(s.race, DEFAULT_SETTINGS.race),
+    slot: whole(s.slot, -1, 7, DEFAULT_SETTINGS.slot),
+    computers: whole(s.computers, 0, 7, DEFAULT_SETTINGS.computers),
+    computerRace: race(s.computerRace, DEFAULT_SETTINGS.computerRace)
+  };
+}
+function playHow(s) {
+  return {
+    useMapSettings: s.game === "ums" ? true : s.game === "melee" ? false : null,
+    race: s.race,
+    ...s.slot >= 0 ? { slot: s.slot } : {},
+    computers: Array.from({ length: s.computers }, () => s.computerRace),
+    setup: s.game === "setup"
+  };
+}
+
 // src/page.ts
-function registerPreferencesPage(api, service) {
+function registerPreferencesPage(api, service, settings) {
   const t = api.i18n.t;
   const w = api.ui.widgets;
+  let pending = null;
+  let reset = null;
   return api.ui.preferencesPage({
     mount(body) {
       const line = w.statusLine();
@@ -144,26 +173,88 @@ function registerPreferencesPage(api, service) {
           return;
         }
         line.busy(t("Asking the engine\u2026"));
-        const s = await service.status();
+        const s2 = await service.status();
         if (!live) return;
-        if (!s.available) line.set(s.reason ?? t("The engine cannot run a game here."), "warn");
-        else if (s.files === "archives") line.set(t("Ready. It plays from your StarCraft 1.16.1 files."), "ok");
-        else if (s.files === "copy") line.set(t("Ready. It plays from the copy of StarCraft you gave the site."), "ok");
+        if (!s2.available) line.set(s2.reason ?? t("The engine cannot run a game here."), "warn");
+        else if (s2.files === "archives") line.set(t("Ready. It plays from your StarCraft 1.16.1 files."), "ok");
+        else if (s2.files === "copy") line.set(t("Ready. It plays from the copy of StarCraft you gave the site."), "ok");
         else line.set(t("Ready. It plays from this development server's files."), "ok");
       };
       const again = w.button(t("Check again"), { onClick: () => void check() });
       again.hidden = !service.present;
+      const races = () => [
+        { value: 6, label: t("Random") },
+        { value: 1, label: t("Terran") },
+        { value: 2, label: t("Protoss") },
+        { value: 0, label: t("Zerg") }
+      ];
+      const s = settings();
+      const game = w.select([
+        { value: "map", label: t("From the map") },
+        { value: "ums", label: t("Use Map Settings") },
+        { value: "melee", label: t("Melee") },
+        { value: "setup", label: t("Choose on the play page") }
+      ], { value: s.game, onChange: () => fit() });
+      const race = w.select(races(), { value: s.race });
+      const slot = w.select([
+        { value: -1, label: t("The first open slot") },
+        ...Array.from({ length: 8 }, (_, i) => ({ value: i, label: t("Player {n}", { n: i + 1 }) }))
+      ], { value: s.slot });
+      const computers = w.number({ value: s.computers, min: 0, max: 7, step: 1 });
+      const computerRace = w.select(races(), { value: s.computerRace });
+      const fit = () => {
+        const kind = game.value;
+        race.disabled = kind === "setup";
+        slot.disabled = kind === "melee" || kind === "setup";
+        computers.disabled = computerRace.disabled = kind === "ums" || kind === "setup";
+      };
+      const show = (v) => {
+        game.value = v.game;
+        race.value = String(v.race);
+        slot.value = String(v.slot);
+        computers.value = String(v.computers);
+        computerRace.value = String(v.computerRace);
+        fit();
+      };
+      fit();
+      pending = () => {
+        const n = Math.round(Number(computers.value));
+        api.storage.set(SETTINGS_KEY, {
+          game: game.value,
+          race: Number(race.value),
+          slot: Number(slot.value),
+          computers: Number.isFinite(n) ? Math.min(7, Math.max(0, n)) : DEFAULT_SETTINGS.computers,
+          computerRace: Number(computerRace.value)
+        });
+      };
+      reset = () => show(DEFAULT_SETTINGS);
       body.append(
         w.hint(t("scm-sim is the game engine behind the site's play page. This plugin lets other plugins use it: a replay tool can have a replay played to its end and learn what really happened in it, and a map can be started in a browser tab. Its one menu item is Tools \u25B8 Test Map in Browser.")),
         w.hint(t("The engine runs in your browser from your own copy of StarCraft. A replay or a map handed to it is not stored and not sent anywhere.")),
         line,
-        w.row(again)
+        w.row(again),
+        w.group(
+          t("Test Map in Browser"),
+          w.form([
+            { label: t("Game type"), field: game },
+            { label: t("Your race"), field: race },
+            { label: t("Your slot"), field: slot },
+            { label: t("Computers"), field: computers },
+            { label: t("Computer race"), field: computerRace }
+          ]),
+          w.hint(t("From the map: Use Map Settings when the map has computer players or units placed beyond the start locations, melee otherwise. Choose on the play page: the map opens on the play page's setup screen, and nothing starts until you press Start Game there.")),
+          w.hint(t("Your slot is for Use Map Settings, the computers for melee. Where the map fixes a slot's race, or has fewer places, the map wins."))
+        )
       );
       void check();
       return () => {
         live = false;
+        pending = null;
+        reset = null;
       };
-    }
+    },
+    apply: () => pending?.(),
+    reset: () => reset?.()
   });
 }
 
@@ -183,8 +274,8 @@ var PlayTab = class {
     if (m.type === "scmjs.play.ready") {
       this.ready = true;
       this.hand();
-    } else if (m.type === "scmjs.play.started") {
-      this.waiting?.resolve();
+    } else if (m.type === "scmjs.play.started" || m.type === "scmjs.play.shown") {
+      this.waiting?.resolve(m.type === "scmjs.play.shown" ? "shown" : "started");
       this.waiting = null;
     } else if (m.type === "scmjs.play.error") {
       this.waiting?.reject(new Error(String(m.message ?? "")));
@@ -198,10 +289,10 @@ var PlayTab = class {
   }
   hand() {
     if (!this.tab || this.tab.closed || !this.map || !this.ready) return;
-    this.tab.postMessage({ type: "scmjs.play", map: this.map.bytes.slice(), name: this.map.name, useMapSettings: true }, this.address.origin);
+    this.tab.postMessage({ type: "scmjs.play", map: this.map.bytes.slice(), name: this.map.name, ...this.map.how }, this.address.origin);
   }
   /** `map`: the bytes, or a promise of them (the tab is opened before anything is awaited: a browser lets a click open a tab, not what follows it later). */
-  async play(map) {
+  async play(map, how) {
     const reuse = this.tab !== null && !this.tab.closed;
     if (!reuse) {
       this.ready = false;
@@ -210,7 +301,7 @@ var PlayTab = class {
     if (!this.tab) throw new Error(this.words.blocked);
     const got = await map;
     if (!got) throw new Error(this.words.noMap);
-    this.map = got;
+    this.map = { bytes: got.bytes, name: got.name, how };
     if (reuse) this.tab.focus();
     this.waiting?.reject(new Error(this.words.replaced));
     const started = new Promise((resolve, reject) => {
@@ -230,21 +321,39 @@ var KO = {
   "Another map was started in its place.": "\uADF8 \uC790\uB9AC\uC5D0 \uB2E4\uB978 \uB9F5\uC774 \uC2DC\uC791\uB418\uC5C8\uC2B5\uB2C8\uB2E4.",
   "Asking the engine\u2026": "\uC5D4\uC9C4\uC5D0 \uD655\uC778\uD558\uB294 \uC911\u2026",
   "Check again": "\uB2E4\uC2DC \uD655\uC778",
+  "Choose on the play page": "\uD50C\uB808\uC774 \uD398\uC774\uC9C0\uC5D0\uC11C \uACE0\uB974\uAE30",
+  "Computer race": "\uCEF4\uD4E8\uD130 \uC885\uC871",
+  "Computers": "\uCEF4\uD4E8\uD130",
+  "From the map": "\uB9F5\uC5D0 \uB530\uB77C",
+  "From the map: Use Map Settings when the map has computer players or units placed beyond the start locations, melee otherwise. Choose on the play page: the map opens on the play page's setup screen, and nothing starts until you press Start Game there.": "\uB9F5\uC5D0 \uB530\uB77C: \uB9F5\uC5D0 \uCEF4\uD4E8\uD130 \uD50C\uB808\uC774\uC5B4\uAC00 \uC788\uAC70\uB098 \uC2DC\uC791 \uC704\uCE58 \uB9D0\uACE0\uB3C4 \uBC30\uCE58\uB41C \uC720\uB2DB\uC774 \uC788\uC73C\uBA74 \uC720\uC988 \uB9F5 \uC138\uD305, \uC544\uB2C8\uBA74 \uBC00\uB9AC\uB85C \uC2E4\uD589\uD569\uB2C8\uB2E4. \uD50C\uB808\uC774 \uD398\uC774\uC9C0\uC5D0\uC11C \uACE0\uB974\uAE30: \uB9F5\uC774 \uD50C\uB808\uC774 \uD398\uC774\uC9C0\uC758 \uAC8C\uC784 \uC124\uC815 \uD654\uBA74\uC5D0 \uC5F4\uB9AC\uACE0, \uADF8\uACF3\uC5D0\uC11C \uAC8C\uC784 \uC2DC\uC791\uC744 \uB204\uB97C \uB54C\uAE4C\uC9C0 \uC544\uBB34\uAC83\uB3C4 \uC2DC\uC791\uB418\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.",
+  "Game type": "\uAC8C\uC784 \uC720\uD615",
+  "Melee": "\uBC00\uB9AC",
+  "Player {n}": "\uD50C\uB808\uC774\uC5B4 {n}",
+  "Protoss": "\uD504\uB85C\uD1A0\uC2A4",
+  "Random": "\uBB34\uC791\uC704",
   "Ready. It plays from the copy of StarCraft you gave the site.": "\uC900\uBE44\uB418\uC5C8\uC2B5\uB2C8\uB2E4. \uC0AC\uC774\uD2B8\uC5D0 \uC81C\uACF5\uD55C StarCraft \uBCF5\uC0AC\uBCF8\uC73C\uB85C \uC2E4\uD589\uD569\uB2C8\uB2E4.",
   "Ready. It plays from this development server's files.": "\uC900\uBE44\uB418\uC5C8\uC2B5\uB2C8\uB2E4. \uC774 \uAC1C\uBC1C \uC11C\uBC84\uC758 \uD30C\uC77C\uB85C \uC2E4\uD589\uD569\uB2C8\uB2E4.",
   "Ready. It plays from your StarCraft 1.16.1 files.": "\uC900\uBE44\uB418\uC5C8\uC2B5\uB2C8\uB2E4. \uC0AC\uC6A9\uC790\uC758 StarCraft 1.16.1 \uD30C\uC77C\uB85C \uC2E4\uD589\uD569\uB2C8\uB2E4.",
+  "scm-sim is the game engine behind the site's play page. This plugin lets other plugins use it: a replay tool can have a replay played to its end and learn what really happened in it, and a map can be started in a browser tab. Its one menu item is Tools \u25B8 Test Map in Browser.": "scm-sim\uC740 \uC0AC\uC774\uD2B8\uC758 \uD50C\uB808\uC774 \uD398\uC774\uC9C0\uB97C \uC6C0\uC9C1\uC774\uB294 \uAC8C\uC784 \uC5D4\uC9C4\uC785\uB2C8\uB2E4. \uC774 \uD50C\uB7EC\uADF8\uC778\uC740 \uB2E4\uB978 \uD50C\uB7EC\uADF8\uC778\uC774 \uADF8 \uC5D4\uC9C4\uC744 \uC4F8 \uC218 \uC788\uAC8C \uD569\uB2C8\uB2E4. \uB9AC\uD50C\uB808\uC774 \uB3C4\uAD6C\uB294 \uB9AC\uD50C\uB808\uC774\uB97C \uB05D\uAE4C\uC9C0 \uC2E4\uD589\uD574 \uC2E4\uC81C\uB85C \uC77C\uC5B4\uB09C \uC77C\uC744 \uC54C\uC544\uB0BC \uC218 \uC788\uACE0, \uB9F5\uC744 \uBE0C\uB77C\uC6B0\uC800 \uD0ED\uC5D0\uC11C \uC2DC\uC791\uD560 \uC218\uB3C4 \uC788\uC2B5\uB2C8\uB2E4. \uBA54\uB274 \uD56D\uBAA9\uC740 \uB3C4\uAD6C \u25B8 \uBE0C\uB77C\uC6B0\uC800\uC5D0\uC11C \uB9F5 \uD14C\uC2A4\uD2B8 \uD558\uB098\uBFD0\uC785\uB2C8\uB2E4.",
+  "Terran": "\uD14C\uB780",
   "Test Map in Browser": "\uBE0C\uB77C\uC6B0\uC800\uC5D0\uC11C \uB9F5 \uD14C\uC2A4\uD2B8",
   "The browser did not let the play page open. Allow pop-ups for this site and try again.": "\uBE0C\uB77C\uC6B0\uC800\uAC00 \uD50C\uB808\uC774 \uD398\uC774\uC9C0\uB97C \uC5F4\uC9C0 \uBABB\uD558\uAC8C \uD588\uC2B5\uB2C8\uB2E4. \uC774 \uC0AC\uC774\uD2B8\uC758 \uD31D\uC5C5\uC744 \uD5C8\uC6A9\uD55C \uB4A4 \uB2E4\uC2DC \uC2DC\uB3C4\uD558\uC138\uC694.",
   "The engine cannot run a game here.": "\uC5EC\uAE30\uC11C\uB294 \uC5D4\uC9C4\uC774 \uAC8C\uC784\uC744 \uC2E4\uD589\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.",
   "The engine runs in your browser from your own copy of StarCraft. A replay or a map handed to it is not stored and not sent anywhere.": "\uC5D4\uC9C4\uC740 \uC0AC\uC6A9\uC790\uC758 StarCraft \uBCF5\uC0AC\uBCF8\uC744 \uC0AC\uC6A9\uD574 \uBE0C\uB77C\uC6B0\uC800 \uC548\uC5D0\uC11C \uC2E4\uD589\uB429\uB2C8\uB2E4. \uC5D4\uC9C4\uC5D0 \uB118\uAE34 \uB9AC\uD50C\uB808\uC774\uB098 \uB9F5\uC740 \uC800\uC7A5\uB418\uC9C0 \uC54A\uC73C\uBA70 \uC5B4\uB514\uB85C\uB3C4 \uC804\uC1A1\uB418\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.",
-  "The map is running on the play page.": "\uD50C\uB808\uC774 \uD398\uC774\uC9C0\uC5D0\uC11C \uB9F5\uC774 \uC2E4\uD589 \uC911\uC785\uB2C8\uB2E4.",
-  "The play page could not start the map: {message}": "\uD50C\uB808\uC774 \uD398\uC774\uC9C0\uC5D0\uC11C \uB9F5\uC744 \uC2DC\uC791\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4: {message}",
   "The engine was closed before it finished.": "\uC5D4\uC9C4\uC774 \uB05D\uB098\uAE30 \uC804\uC5D0 \uB2EB\uD614\uC2B5\uB2C8\uB2E4.",
   "The engine's page did not answer.": "\uC5D4\uC9C4 \uD398\uC774\uC9C0\uAC00 \uC751\uB2F5\uD558\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4.",
+  "The first open slot": "\uCCAB \uBC88\uC9F8 \uBE48 \uC2AC\uB86F",
+  "The map is on the play page's setup screen.": "\uD50C\uB808\uC774 \uD398\uC774\uC9C0\uC758 \uAC8C\uC784 \uC124\uC815 \uD654\uBA74\uC5D0 \uB9F5\uC774 \uC5F4\uB838\uC2B5\uB2C8\uB2E4.",
+  "The map is running on the play page.": "\uD50C\uB808\uC774 \uD398\uC774\uC9C0\uC5D0\uC11C \uB9F5\uC774 \uC2E4\uD589 \uC911\uC785\uB2C8\uB2E4.",
+  "The play page could not start the map: {message}": "\uD50C\uB808\uC774 \uD398\uC774\uC9C0\uC5D0\uC11C \uB9F5\uC744 \uC2DC\uC791\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4: {message}",
   "There is no map to play.": "\uD50C\uB808\uC774\uD560 \uB9F5\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.",
   "This browser has no copy of StarCraft to play from. Give the site your game on the Game Data page.": "\uC774 \uBE0C\uB77C\uC6B0\uC800\uC5D0\uB294 \uC2E4\uD589\uC5D0 \uC4F8 StarCraft \uBCF5\uC0AC\uBCF8\uC774 \uC5C6\uC2B5\uB2C8\uB2E4. \uAC8C\uC784 \uB370\uC774\uD130 \uD398\uC774\uC9C0\uC5D0\uC11C \uC0AC\uC774\uD2B8\uC5D0 \uAC8C\uC784\uC744 \uC81C\uACF5\uD558\uC138\uC694.",
   "This editor has no play page beside it, so the engine cannot be reached from here. It is at scmjs.dev.": "\uC774 \uD3B8\uC9D1\uAE30\uC5D0\uB294 \uD568\uAED8 \uC81C\uACF5\uB418\uB294 \uD50C\uB808\uC774 \uD398\uC774\uC9C0\uAC00 \uC5C6\uC5B4 \uC5EC\uAE30\uC11C\uB294 \uC5D4\uC9C4\uC5D0 \uC5F0\uACB0\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4. \uC5D4\uC9C4\uC740 scmjs.dev\uC5D0 \uC788\uC2B5\uB2C8\uB2E4.",
-  "scm-sim is the game engine behind the site's play page. This plugin lets other plugins use it: a replay tool can have a replay played to its end and learn what really happened in it, and a map can be started in a browser tab. Its one menu item is Tools \u25B8 Test Map in Browser.": "scm-sim\uC740 \uC0AC\uC774\uD2B8\uC758 \uD50C\uB808\uC774 \uD398\uC774\uC9C0\uB97C \uC6C0\uC9C1\uC774\uB294 \uAC8C\uC784 \uC5D4\uC9C4\uC785\uB2C8\uB2E4. \uC774 \uD50C\uB7EC\uADF8\uC778\uC740 \uB2E4\uB978 \uD50C\uB7EC\uADF8\uC778\uC774 \uADF8 \uC5D4\uC9C4\uC744 \uC4F8 \uC218 \uC788\uAC8C \uD569\uB2C8\uB2E4. \uB9AC\uD50C\uB808\uC774 \uB3C4\uAD6C\uB294 \uB9AC\uD50C\uB808\uC774\uB97C \uB05D\uAE4C\uC9C0 \uC2E4\uD589\uD574 \uC2E4\uC81C\uB85C \uC77C\uC5B4\uB09C \uC77C\uC744 \uC54C\uC544\uB0BC \uC218 \uC788\uACE0, \uB9F5\uC744 \uBE0C\uB77C\uC6B0\uC800 \uD0ED\uC5D0\uC11C \uC2DC\uC791\uD560 \uC218\uB3C4 \uC788\uC2B5\uB2C8\uB2E4. \uBA54\uB274 \uD56D\uBAA9\uC740 \uB3C4\uAD6C \u25B8 \uBE0C\uB77C\uC6B0\uC800\uC5D0\uC11C \uB9F5 \uD14C\uC2A4\uD2B8 \uD558\uB098\uBFD0\uC785\uB2C8\uB2E4."
+  "Use Map Settings": "\uC720\uC988 \uB9F5 \uC138\uD305",
+  "Your race": "\uB0B4 \uC885\uC871",
+  "Your slot": "\uB0B4 \uC2AC\uB86F",
+  "Your slot is for Use Map Settings, the computers for melee. Where the map fixes a slot's race, or has fewer places, the map wins.": "\uB0B4 \uC2AC\uB86F\uC740 \uC720\uC988 \uB9F5 \uC138\uD305\uC5D0, \uCEF4\uD4E8\uD130\uB294 \uBC00\uB9AC\uC5D0 \uC4F0\uC785\uB2C8\uB2E4. \uB9F5\uC774 \uC2AC\uB86F\uC758 \uC885\uC871\uC744 \uC815\uD574 \uB450\uC5C8\uAC70\uB098 \uC790\uB9AC\uAC00 \uB354 \uC801\uC73C\uBA74 \uB9F5\uC758 \uC124\uC815\uC744 \uB530\uB985\uB2C8\uB2E4.",
+  "Zerg": "\uC800\uADF8"
 };
 
 // plugin.ts
@@ -265,6 +374,15 @@ function activate(api) {
     noMap: t("There is no map to play."),
     replaced: t("Another map was started in its place.")
   });
+  const settings = () => readSettings(api.storage.get(SETTINGS_KEY, null));
+  const test = (map) => {
+    if (!tab) throw absent();
+    const open = async () => {
+      const file = await api.document.export({ format: "scx" });
+      return file ? { bytes: new Uint8Array(await file.arrayBuffer()), name: file.name } : null;
+    };
+    return tab.play(map ?? open(), playHow(settings()));
+  };
   const service = {
     present: address !== null,
     status: async () => bridge ? bridge.status() : { available: false, files: null, reason: absent().message, timeline: null },
@@ -273,23 +391,18 @@ function activate(api) {
       return bridge.analyse(replay, options);
     },
     play: async (map) => {
-      if (!tab) throw absent();
-      const open = async () => {
-        const file = await api.document.export({ format: "scx" });
-        return file ? { bytes: new Uint8Array(await file.arrayBuffer()), name: file.name } : null;
-      };
-      return tab.play(map ?? open());
+      await test(map);
     }
   };
   const provided = api.services.provide("engine", service, { version: SERVICE_VERSION });
-  const page = registerPreferencesPage(api, service);
+  const page = registerPreferencesPage(api, service, settings);
   const menu = address ? [
     api.commands.register({
       id: "play",
       title: msg("Test Map in Browser"),
       enabled: () => api.document.isOpen(),
-      run: () => service.play().then(
-        () => api.ui.status(t("The map is running on the play page.")),
+      run: () => test().then(
+        (outcome) => api.ui.status(outcome === "shown" ? t("The map is on the play page's setup screen.") : t("The map is running on the play page.")),
         (err) => api.ui.status(t("The play page could not start the map: {message}", { message: err instanceof Error ? err.message : String(err) }))
       )
     }),
