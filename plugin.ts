@@ -13,6 +13,7 @@ import type { PluginApi } from "@scm-js/plugin-api";
 import type { ScmSimService } from "./contract";
 import { simAddress } from "./src/address";
 import { Bridge, domFrames } from "./src/bridge";
+import { domViewFrames, pressOnWindow, ViewBridge } from "./src/view";
 import { registerPreferencesPage } from "./src/page";
 import { PlayTab } from "./src/play";
 import { playHow, readSettings, SETTINGS_KEY } from "./src/settings";
@@ -49,11 +50,28 @@ export function activate(api: PluginApi): () => void {
     return tab.play(map ?? open(), playHow(settings()));
   };
 
+  /** The game views other plugins asked for; they go with this plugin. */
+  const views = new Set<ViewBridge>();
   const service: ScmSimService = {
     present: address !== null,
     status: async () => bridge ? bridge.status() : { available: false, files: null, reason: absent().message, timeline: null },
     analyse: async (replay, options) => { if (!bridge) throw absent(); return bridge.analyse(replay, options); },
     play: async (map) => { await test(map); },
+    view: (element) => {
+      if (!address) throw absent();
+      const view = new ViewBridge(address.view, element, domViewFrames(address.origin), {
+        noAnswer: t("The engine's page did not answer."),
+        noFiles: t("This browser has no copy of StarCraft to play from. Give the site your game on the Game Data page."),
+        replaced: t("Another replay was loaded in its place."),
+        closed: t("The game view was closed."),
+      });
+      // The keys the view does not use are the editor's: pressed again on its window.
+      view.onKey(pressOnWindow);
+      views.add(view);
+      const dispose = view.dispose.bind(view);
+      view.dispose = () => { views.delete(view); dispose(); };
+      return view;
+    },
   };
   const provided = api.services.provide("engine", service, { version: SERVICE_VERSION });
   const page = registerPreferencesPage(api, service, settings);
@@ -70,5 +88,5 @@ export function activate(api: PluginApi): () => void {
     }),
     api.menu.add("Tools", { label: msg("Test Map in Browser"), icon: "plugin", after: "Test Map Settings…", command: "play" }),
   ] : [];
-  return () => { for (const m of menu) m.dispose(); provided.dispose(); page.dispose(); bridge?.close(); tab?.dispose(); catalogue.dispose(); };
+  return () => { for (const v of [...views]) v.dispose(); for (const m of menu) m.dispose(); provided.dispose(); page.dispose(); bridge?.close(); tab?.dispose(); catalogue.dispose(); };
 }

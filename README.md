@@ -124,6 +124,33 @@ page says (above); with *Choose on the play page* it is put on the setup screen 
 resolves when it is shown there. Call it from the click that asks for
 it, because a browser only lets a click open a tab. It resolves when the game is on the page.
 
+### `view(element)`
+
+Since 0.5.0. The game itself, drawn inside an element of yours and filling it: a replay
+played with the game's own graphics (Remastered's where the person's copy has them) and
+its console, which you drive. The engine is about a gigabyte of memory, so keep one view
+and load replays into it in turn. Check that `view` is there before calling it; an older
+copy of this plugin has none.
+
+```ts
+const view = sim.view(element);
+const ready = await view.ready;              // { files, reason }: reason says why when files is null
+const replay = await view.load(bytes, "game.rep");   // paused at frame 0
+view.speed(4); view.play(true);
+view.onFrame(({ frame, playing }) => timeline.move(frame));
+view.onCamera(({ x, y, byUser }) => { if (byUser) stopFollowing(); });
+view.seek(12000);                            // quick backwards too, when replay.rewinds
+await view.options({ remastered: true, lighting: false, fog: false });
+view.dispose();
+```
+
+`camera(x, y)` looks at a point of the map in pixels and `player(slot)` picks whose eyes
+the fog is drawn through. A key pressed while the view has the keyboard and that it does
+not use itself (all but the arrows, which scroll) comes to `onKey` and is pressed again on
+the editor's window, so the editor's hotkeys and every plugin's still work. Inside the
+editor, `api.ui.mapView` is the place for the element: it is never moved, so the game is
+not started again when the person switches to the map and back.
+
 ## Replays it can play
 
 The engine runs StarCraft 1.16.1's own game code. A replay written by 1.16.1 is given to it
