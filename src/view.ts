@@ -4,14 +4,14 @@
  *
  *   ← `{ type: "scmjs.view.ready", version, files, why? }`       the page, once it has looked for the game's files
  *   → `{ type: "scmjs.view.load", replay, name }`                 ← `loaded {…}` or `error {message}`
- *   → `play {playing}`, `speed {multiplier}`, `seek {frame}`, `camera {x, y}`, `player {slot}`
+ *   → `play {playing}`, `speed {multiplier}`, `seek {frame}`, `camera {x, y}`, `follow {track}`, `player {slot}`
  *   → `options {fog?, sound?, volume?, remastered?, lighting?}`   ← `looks {…}`
  *   ← `frame {frame, playing, seeking}`, `camera {x, y, width, height, byUser}`, `key {key, code, …}`
  *
  * One load at a time: a load asked for while another is on its way replaces it, and the first is rejected. Nothing
  * here touches the DOM directly: the frame is behind `ViewFrameHost`, so the conversation is tested without one.
  */
-import type { Disposable, ScmSimView, ViewCamera, ViewFrame, ViewKey, ViewLooks, ViewOptions, ViewReady, ViewedReplay } from "../contract";
+import type { Disposable, ScmSimView, ViewCamera, ViewFrame, ViewHover, ViewHoverUnit, ViewKey, ViewLooks, ViewOptions, ViewReady, ViewTrack, ViewUnits, ViewedReplay } from "../contract";
 
 export interface HostedFrame {
   post(message: object): void;
@@ -42,6 +42,8 @@ export class ViewBridge implements ScmSimView {
   private readonly frames = new Set<Listener<ViewFrame>>();
   private readonly cameras = new Set<Listener<ViewCamera>>();
   private readonly keys = new Set<Listener<ViewKey>>();
+  private readonly units = new Set<Listener<ViewUnits>>();
+  private readonly hovers = new Set<Listener<ViewHover | null>>();
   private closed = false;
 
   constructor(url: string, element: HTMLElement, host: ViewFrameHost, words: ViewWords, readyMs = 30000) {
@@ -68,6 +70,7 @@ export class ViewBridge implements ScmSimView {
             map: { width: Number((m.map as { width?: unknown } | undefined)?.width) || 0, height: Number((m.map as { height?: unknown } | undefined)?.height) || 0 },
             rewinds: m.rewinds === true,
             looks: looksOf((m.looks ?? {}) as Record<string, unknown>),
+            follows: m.follows === true,
           });
           return;
         }
@@ -80,6 +83,16 @@ export class ViewBridge implements ScmSimView {
         case "scmjs.view.looks": { const l = looksOf(m); for (const w of this.looksWaiting.splice(0)) w(l); return; }
         case "scmjs.view.frame": { const f: ViewFrame = { frame: Number(m.frame) || 0, playing: m.playing === true, seeking: typeof m.seeking === "number" ? m.seeking : null }; for (const l of this.frames) l(f); return; }
         case "scmjs.view.camera": { const c: ViewCamera = { x: Number(m.x) || 0, y: Number(m.y) || 0, width: Number(m.width) || 0, height: Number(m.height) || 0, byUser: m.byUser === true }; for (const l of this.cameras) l(c); return; }
+        case "scmjs.view.units": {
+          if (!(m.boxes instanceof Float32Array) || !(m.colours instanceof Uint32Array) || m.boxes.length !== m.colours.length * 4) return;
+          const wide = Number(m.wide) || 0;
+          // (A fog that is not whole rows of the map is no fog to draw.)
+          const fog = m.fog instanceof Uint8Array && wide > 0 && m.fog.length % wide === 0 ? m.fog : null;
+          const u: ViewUnits = { frame: Number(m.frame) || 0, boxes: m.boxes, colours: m.colours, fog, wide: fog ? wide : 0 };
+          for (const l of this.units) l(u);
+          return;
+        }
+        case "scmjs.view.hover": { const h = hoverOf(m); for (const l of this.hovers) l(h); return; }
         case "scmjs.view.key": {
           const k: ViewKey = { key: String(m.key ?? ""), code: String(m.code ?? ""), shiftKey: m.shiftKey === true, ctrlKey: m.ctrlKey === true, altKey: m.altKey === true, metaKey: m.metaKey === true };
           for (const l of this.keys) l(k);
@@ -105,7 +118,9 @@ export class ViewBridge implements ScmSimView {
   play(playing: boolean): void { this.tell({ type: "scmjs.view.play", playing }); }
   speed(multiplier: number): void { this.tell({ type: "scmjs.view.speed", multiplier }); }
   seek(frame: number): void { this.tell({ type: "scmjs.view.seek", frame: Math.max(0, Math.floor(frame)) }); }
-  camera(x: number, y: number): void { this.tell({ type: "scmjs.view.camera", x, y }); }
+  camera(x: number, y: number, height?: number): void { this.tell(height !== undefined && height > 0 ? { type: "scmjs.view.camera", x, y, height } : { type: "scmjs.view.camera", x, y }); }
+  // (Copies: the caller keeps its track.)
+  follow(track: ViewTrack | null): void { this.tell({ type: "scmjs.view.follow", track: track && { every: track.every, x: track.x.slice(), y: track.y.slice(), cut: track.cut.slice() } }); }
   player(slot: number): void { this.tell({ type: "scmjs.view.player", slot }); }
   options(o: ViewOptions): Promise<ViewLooks> {
     if (this.closed) return Promise.reject(new Error(this.words.closed));
@@ -122,6 +137,8 @@ export class ViewBridge implements ScmSimView {
   onFrame(listener: Listener<ViewFrame>): Disposable { return this.listen(this.frames, listener); }
   onCamera(listener: Listener<ViewCamera>): Disposable { return this.listen(this.cameras, listener); }
   onKey(listener: Listener<ViewKey>): Disposable { return this.listen(this.keys, listener); }
+  onUnits(listener: Listener<ViewUnits>): Disposable { return this.listen(this.units, listener); }
+  onHover(listener: Listener<ViewHover | null>): Disposable { return this.listen(this.hovers, listener); }
 
   dispose(): void {
     if (this.closed) return;
@@ -129,7 +146,7 @@ export class ViewBridge implements ScmSimView {
     this.loading?.reject(new Error(this.words.closed));
     this.loading = null;
     this.looksWaiting.length = 0;
-    this.frames.clear(); this.cameras.clear(); this.keys.clear();
+    this.frames.clear(); this.cameras.clear(); this.keys.clear(); this.units.clear(); this.hovers.clear();
     this.frame.remove();
   }
 }
@@ -157,4 +174,24 @@ export function domViewFrames(origin: string): ViewFrameHost {
 export function pressOnWindow(k: ViewKey): void {
   if (typeof window === "undefined" || typeof KeyboardEvent === "undefined") return;
   window.dispatchEvent(new KeyboardEvent("keydown", { key: k.key, code: k.code, shiftKey: k.shiftKey, ctrlKey: k.ctrlKey, altKey: k.altKey, metaKey: k.metaKey, bubbles: true, cancelable: true }));
+}
+
+const WORKS = new Set(["construction", "train", "research", "upgrade", "morph", "addon", "nuke"]);
+
+/** A hover message as the contract has it: null for nothing under the pointer, or a message that is not one. */
+function hoverOf(m: Record<string, unknown>): ViewHover | null {
+  const u = m.unit as Record<string, unknown> | null | undefined;
+  if (!u || typeof u !== "object") return null;
+  const n = (v: unknown, or = -1) => (typeof v === "number" && Number.isFinite(v) ? v : or);
+  if (n(u.type) < 0) return null;
+  const unit: ViewHoverUnit = {
+    id: n(u.id), type: n(u.type), owner: n(u.owner, 0),
+    hp: n(u.hp, 0), hpMax: n(u.hpMax, 0), invincible: u.invincible === true,
+    shields: n(u.shields), shieldsMax: n(u.shieldsMax, 0), energy: n(u.energy), energyMax: n(u.energyMax, 0),
+    completed: u.completed !== false,
+    work: typeof u.work === "string" && WORKS.has(u.work) ? (u.work as ViewHoverUnit["work"]) : null, workId: n(u.workId),
+    progress: n(u.progress), queue: Array.isArray(u.queue) ? u.queue.filter((t): t is number => typeof t === "number" && t >= 0) : [],
+    resources: n(u.resources),
+  };
+  return { unit, x: n(m.x, 0), y: n(m.y, 0) };
 }

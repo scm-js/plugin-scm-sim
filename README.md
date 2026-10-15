@@ -145,7 +145,34 @@ view.dispose();
 ```
 
 `camera(x, y)` looks at a point of the map in pixels and `player(slot)` picks whose eyes
-the fog is drawn through. A key pressed while the view has the keyboard and that it does
+the fog is drawn through. Since 0.6.0, `camera(x, y, height)` also sets how much of the map
+shows top to bottom, from 240 to 960 pixels (the game's own view is 480), so the game can
+match the scale of the map it replaces. This works only while the console is hidden, and it
+is hidden unless you ask for it with `options({ console: true })`. `onUnits` hears the
+squares the game's minimap would draw (each one's middle and size in map pixels, and its
+colour) up to eight times a second, so you can draw a minimap of your own, such as the
+editor's.
+
+Also since 0.6.0, `follow(track)` hands the view a camera path for the whole game: where
+the middle of the view is every few frames, with the points where it cuts. The game moves
+its camera along it as it draws, by the frame it shows, so the camera keeps in step with the
+picture and stays smooth at any speed. Moving the camera with `camera(x, y)` on every frame
+report can't do that, because the reports come only ten times a second. The track holds
+until `camera`, another track, `follow(null)`, or the person moving the view, which comes
+to `onCamera` with `byUser`. Check `follows` on the loaded replay first, since an older page
+ignores a track.
+
+With the fog on, the squares come with the fog itself: `fog` has a byte per tile, row by row,
+`wide` tiles to a row (0 never seen, 1 seen before, 2 seen now), so a minimap of your own can
+darken its ground the way the game's does. `onHover` hears what the pointer is on, for a
+tooltip of your own, since the view shows the game without its console: the unit's type,
+owner, hit points, shields and energy, what it is making or researching and how far along it
+is, its training queue, and where the pointer is. It comes up to thirty times a second while
+the unit or the pointer moves, and null once the pointer is on nothing. In a replay this
+covers every player's units, as the game's replay console does, but only what the eyes the
+game is seen through can see.
+
+A key pressed while the view has the keyboard and that it does
 not use itself (all but the arrows, which scroll) comes to `onKey` and is pressed again on
 the editor's window, so the editor's hotkeys and every plugin's still work. Inside the
 editor, `api.ui.mapView` is the place for the element: it is never moved, so the game is

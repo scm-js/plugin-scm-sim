@@ -1,6 +1,6 @@
 {
   "name": "scmjs-plugin-scm-sim",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "private": true,
   "description": "scm-sim — the site's game engine, reached from the scmJS map editor as a library other plugins use.",
   "author": "Jeany",
