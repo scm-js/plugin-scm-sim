@@ -10,6 +10,8 @@ export interface SimAddress {
   play: string;
   /** The analysis page: framed out of sight, plays a replay and answers with a timeline. */
   analyse: string;
+  /** The play page as a replay viewer, framed in an element of the editor's (`src/view.ts`). */
+  view: string;
 }
 
 export function simAddress(at: { origin: string; hostname: string; pathname: string }): SimAddress | null {
@@ -17,5 +19,5 @@ export function simAddress(at: { origin: string; hostname: string; pathname: str
   // A stand-in for the site on this machine serves the editor under /editor/ and the play page beside it.
   const local = /^(localhost|127\.0\.0\.1)$/.test(at.hostname) && at.pathname.startsWith("/editor/");
   if (!site && !local) return null;
-  return { origin: at.origin, play: `${at.origin}/play/`, analyse: `${at.origin}/play/analyse.html` };
+  return { origin: at.origin, play: `${at.origin}/play/`, analyse: `${at.origin}/play/analyse.html`, view: `${at.origin}/play/?view` };
 }

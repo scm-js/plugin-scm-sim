@@ -5,7 +5,7 @@ function simAddress(at) {
   const site = at.origin === "https://scmjs.dev";
   const local = /^(localhost|127\.0\.0\.1)$/.test(at.hostname) && at.pathname.startsWith("/editor/");
   if (!site && !local) return null;
-  return { origin: at.origin, play: `${at.origin}/play/`, analyse: `${at.origin}/play/analyse.html` };
+  return { origin: at.origin, play: `${at.origin}/play/`, analyse: `${at.origin}/play/analyse.html`, view: `${at.origin}/play/?view` };
 }
 
 // src/bridge.ts
@@ -41,8 +41,8 @@ var Bridge = class {
         if (!m || typeof m.type !== "string") return;
         if (m.type === "scmjs.sim.ready") {
           clearTimeout(timer);
-          const files = m.files === "archives" || m.files === "copy" || m.files === "server" ? m.files : null;
-          resolve({ version: typeof m.version === "number" ? m.version : null, files, why: typeof m.why === "string" ? m.why : null });
+          const files2 = m.files === "archives" || m.files === "copy" || m.files === "server" ? m.files : null;
+          resolve({ version: typeof m.version === "number" ? m.version : null, files: files2, why: typeof m.why === "string" ? m.why : null });
           return;
         }
         const p = typeof m.id === "number" ? this.pending.get(m.id) : void 0;
@@ -128,6 +128,167 @@ function domFrames(origin) {
       }
     };
   };
+}
+
+// src/view.ts
+var files = (v) => v === "archives" || v === "copy" || v === "server" ? v : null;
+var looksOf = (m) => ({ remastered: m.remastered === true, remasteredOn: m.remasteredOn === true, lighting: m.lighting === true, lightingOn: m.lightingOn === true });
+var ViewBridge = class {
+  ready;
+  frame;
+  words;
+  loading = null;
+  looksWaiting = [];
+  frames = /* @__PURE__ */ new Set();
+  cameras = /* @__PURE__ */ new Set();
+  keys = /* @__PURE__ */ new Set();
+  closed = false;
+  constructor(url, element, host, words, readyMs = 3e4) {
+    this.words = words;
+    let answered = () => {
+    };
+    this.ready = new Promise((resolve) => {
+      answered = resolve;
+    });
+    const timer = setTimeout(() => answered({ files: null, reason: words.noAnswer }), readyMs);
+    this.frame = host(url, element, (data) => {
+      const m = data;
+      if (!m || typeof m.type !== "string" || !m.type.startsWith("scmjs.view.") || this.closed) return;
+      switch (m.type) {
+        case "scmjs.view.ready": {
+          clearTimeout(timer);
+          const f = files(m.files);
+          answered({ files: f, reason: f ? null : typeof m.why === "string" && m.why ? m.why : words.noFiles });
+          return;
+        }
+        case "scmjs.view.loaded": {
+          const l = this.loading;
+          this.loading = null;
+          l?.resolve({
+            name: String(m.name ?? ""),
+            frames: Number(m.frames) || 0,
+            players: Array.isArray(m.players) ? m.players.map((p) => ({ slot: Number(p.slot), name: String(p.name ?? ""), race: Number(p.race) })) : [],
+            map: { width: Number(m.map?.width) || 0, height: Number(m.map?.height) || 0 },
+            rewinds: m.rewinds === true,
+            looks: looksOf(m.looks ?? {})
+          });
+          return;
+        }
+        case "scmjs.view.error": {
+          const l = this.loading;
+          this.loading = null;
+          l?.reject(new Error(String(m.message ?? "")));
+          return;
+        }
+        case "scmjs.view.looks": {
+          const l = looksOf(m);
+          for (const w of this.looksWaiting.splice(0)) w(l);
+          return;
+        }
+        case "scmjs.view.frame": {
+          const f = { frame: Number(m.frame) || 0, playing: m.playing === true, seeking: typeof m.seeking === "number" ? m.seeking : null };
+          for (const l of this.frames) l(f);
+          return;
+        }
+        case "scmjs.view.camera": {
+          const c = { x: Number(m.x) || 0, y: Number(m.y) || 0, width: Number(m.width) || 0, height: Number(m.height) || 0, byUser: m.byUser === true };
+          for (const l of this.cameras) l(c);
+          return;
+        }
+        case "scmjs.view.key": {
+          const k = { key: String(m.key ?? ""), code: String(m.code ?? ""), shiftKey: m.shiftKey === true, ctrlKey: m.ctrlKey === true, altKey: m.altKey === true, metaKey: m.metaKey === true };
+          for (const l of this.keys) l(k);
+          return;
+        }
+      }
+    });
+  }
+  async load(replay, name = "replay.rep") {
+    const r = await this.ready;
+    if (this.closed) throw new Error(this.words.closed);
+    if (!r.files) throw new Error(r.reason ?? this.words.noFiles);
+    this.loading?.reject(new Error(this.words.replaced));
+    return new Promise((resolve, reject) => {
+      this.loading = { resolve, reject };
+      this.frame.post({ type: "scmjs.view.load", replay: replay.slice(), name });
+    });
+  }
+  tell(message) {
+    if (!this.closed) this.frame.post(message);
+  }
+  play(playing) {
+    this.tell({ type: "scmjs.view.play", playing });
+  }
+  speed(multiplier) {
+    this.tell({ type: "scmjs.view.speed", multiplier });
+  }
+  seek(frame) {
+    this.tell({ type: "scmjs.view.seek", frame: Math.max(0, Math.floor(frame)) });
+  }
+  camera(x, y) {
+    this.tell({ type: "scmjs.view.camera", x, y });
+  }
+  player(slot) {
+    this.tell({ type: "scmjs.view.player", slot });
+  }
+  options(o) {
+    if (this.closed) return Promise.reject(new Error(this.words.closed));
+    return new Promise((resolve) => {
+      this.looksWaiting.push(resolve);
+      this.frame.post({ type: "scmjs.view.options", ...o });
+    });
+  }
+  listen(set, listener) {
+    set.add(listener);
+    return { dispose: () => {
+      set.delete(listener);
+    } };
+  }
+  onFrame(listener) {
+    return this.listen(this.frames, listener);
+  }
+  onCamera(listener) {
+    return this.listen(this.cameras, listener);
+  }
+  onKey(listener) {
+    return this.listen(this.keys, listener);
+  }
+  dispose() {
+    if (this.closed) return;
+    this.closed = true;
+    this.loading?.reject(new Error(this.words.closed));
+    this.loading = null;
+    this.looksWaiting.length = 0;
+    this.frames.clear();
+    this.cameras.clear();
+    this.keys.clear();
+    this.frame.remove();
+  }
+};
+function domViewFrames(origin) {
+  return (url, element, heard) => {
+    const frame = document.createElement("iframe");
+    frame.title = "StarCraft";
+    frame.style.cssText = "border: 0; display: block; width: 100%; height: 100%";
+    frame.allow = "fullscreen; autoplay";
+    const listener = (e) => {
+      if (e.origin === origin && e.source === frame.contentWindow) heard(e.data);
+    };
+    window.addEventListener("message", listener);
+    frame.src = url;
+    element.append(frame);
+    return {
+      post: (message) => frame.contentWindow?.postMessage(message, origin),
+      remove: () => {
+        window.removeEventListener("message", listener);
+        frame.remove();
+      }
+    };
+  };
+}
+function pressOnWindow(k) {
+  if (typeof window === "undefined" || typeof KeyboardEvent === "undefined") return;
+  window.dispatchEvent(new KeyboardEvent("keydown", { key: k.key, code: k.code, shiftKey: k.shiftKey, ctrlKey: k.ctrlKey, altKey: k.altKey, metaKey: k.metaKey, bubbles: true, cancelable: true }));
 }
 
 // src/settings.ts
@@ -341,6 +502,8 @@ var KO = {
   "The engine cannot run a game here.": "\uC5EC\uAE30\uC11C\uB294 \uC5D4\uC9C4\uC774 \uAC8C\uC784\uC744 \uC2E4\uD589\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.",
   "The engine runs in your browser from your own copy of StarCraft. A replay or a map handed to it is not stored and not sent anywhere.": "\uC5D4\uC9C4\uC740 \uC0AC\uC6A9\uC790\uC758 StarCraft \uBCF5\uC0AC\uBCF8\uC744 \uC0AC\uC6A9\uD574 \uBE0C\uB77C\uC6B0\uC800 \uC548\uC5D0\uC11C \uC2E4\uD589\uB429\uB2C8\uB2E4. \uC5D4\uC9C4\uC5D0 \uB118\uAE34 \uB9AC\uD50C\uB808\uC774\uB098 \uB9F5\uC740 \uC800\uC7A5\uB418\uC9C0 \uC54A\uC73C\uBA70 \uC5B4\uB514\uB85C\uB3C4 \uC804\uC1A1\uB418\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.",
   "The engine was closed before it finished.": "\uC5D4\uC9C4\uC774 \uB05D\uB098\uAE30 \uC804\uC5D0 \uB2EB\uD614\uC2B5\uB2C8\uB2E4.",
+  "Another replay was loaded in its place.": "\uADF8 \uC790\uB9AC\uC5D0 \uB2E4\uB978 \uB9AC\uD50C\uB808\uC774\uB97C \uBD88\uB7EC\uC654\uC2B5\uB2C8\uB2E4.",
+  "The game view was closed.": "\uAC8C\uC784 \uD654\uBA74\uC774 \uB2EB\uD614\uC2B5\uB2C8\uB2E4.",
   "The engine's page did not answer.": "\uC5D4\uC9C4 \uD398\uC774\uC9C0\uAC00 \uC751\uB2F5\uD558\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4.",
   "The first open slot": "\uCCAB \uBC88\uC9F8 \uBE48 \uC2AC\uB86F",
   "The map is on the play page's setup screen.": "\uD50C\uB808\uC774 \uD398\uC774\uC9C0\uC758 \uAC8C\uC784 \uC124\uC815 \uD654\uBA74\uC5D0 \uB9F5\uC774 \uC5F4\uB838\uC2B5\uB2C8\uB2E4.",
@@ -383,6 +546,7 @@ function activate(api) {
     };
     return tab.play(map ?? open(), playHow(settings()));
   };
+  const views = /* @__PURE__ */ new Set();
   const service = {
     present: address !== null,
     status: async () => bridge ? bridge.status() : { available: false, files: null, reason: absent().message, timeline: null },
@@ -392,6 +556,23 @@ function activate(api) {
     },
     play: async (map) => {
       await test(map);
+    },
+    view: (element) => {
+      if (!address) throw absent();
+      const view = new ViewBridge(address.view, element, domViewFrames(address.origin), {
+        noAnswer: t("The engine's page did not answer."),
+        noFiles: t("This browser has no copy of StarCraft to play from. Give the site your game on the Game Data page."),
+        replaced: t("Another replay was loaded in its place."),
+        closed: t("The game view was closed.")
+      });
+      view.onKey(pressOnWindow);
+      views.add(view);
+      const dispose = view.dispose.bind(view);
+      view.dispose = () => {
+        views.delete(view);
+        dispose();
+      };
+      return view;
     }
   };
   const provided = api.services.provide("engine", service, { version: SERVICE_VERSION });
@@ -409,6 +590,7 @@ function activate(api) {
     api.menu.add("Tools", { label: msg("Test Map in Browser"), icon: "plugin", after: "Test Map Settings\u2026", command: "play" })
   ] : [];
   return () => {
+    for (const v of [...views]) v.dispose();
     for (const m of menu) m.dispose();
     provided.dispose();
     page.dispose();

@@ -3,7 +3,7 @@ import { simAddress } from "../src/address";
 
 describe("where the engine is", () => {
   it("is beside the editor at scmjs.dev", () => {
-    expect(simAddress({ origin: "https://scmjs.dev", hostname: "scmjs.dev", pathname: "/editor/" })).toEqual({ origin: "https://scmjs.dev", play: "https://scmjs.dev/play/", analyse: "https://scmjs.dev/play/analyse.html" });
+    expect(simAddress({ origin: "https://scmjs.dev", hostname: "scmjs.dev", pathname: "/editor/" })).toEqual({ origin: "https://scmjs.dev", play: "https://scmjs.dev/play/", analyse: "https://scmjs.dev/play/analyse.html", view: "https://scmjs.dev/play/?view" });
   });
   it("is beside a stand-in for the site on this machine", () => {
     expect(simAddress({ origin: "http://127.0.0.1:5180", hostname: "127.0.0.1", pathname: "/editor/" })?.analyse).toBe("http://127.0.0.1:5180/play/analyse.html");
