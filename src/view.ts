@@ -5,7 +5,7 @@
  *   ← `{ type: "scmjs.view.ready", version, files, why? }`       the page, once it has looked for the game's files
  *   → `{ type: "scmjs.view.load", replay, name }`                 ← `loaded {…}` or `error {message}`
  *   → `play {playing}`, `speed {multiplier}`, `seek {frame}`, `camera {x, y}`, `follow {track}`, `player {slot}`
- *   → `options {fog?, sound?, volume?, remastered?, lighting?}`   ← `looks {…}`
+ *   → `options {fog?, sound?, volume?, music?, duck?, remastered?, lighting?, console?}`   ← `looks {…}`
  *   ← `frame {frame, playing, seeking}`, `camera {x, y, width, height, byUser}`, `key {key, code, …}`
  *
  * One load at a time: a load asked for while another is on its way replaces it, and the first is rejected. Nothing
