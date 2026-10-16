@@ -18,12 +18,15 @@
  *   → `{ type: "scmjs.sim.test", id, chk, module, payload }`        a script's tests beside the game (a page whose
  *                                                                   `ready` says `tests`)
  *   ← `{ type: "scmjs.sim.tested", id, report }`
+ *   → `{ type: "scmjs.sim.test", id, chk, module, payload, players, triggers }` a test of several players, a copy of the
+ *                                                                   game each (a page whose `ready` says `copies`)
+ *   ← `{ type: "scmjs.sim.tested", id, copies }`
  *
  * The frame is made on the first call and kept; `status()` loads it afresh, since the
  * page looks for the game's files once, when it loads. Nothing here touches the DOM
  * directly: the frame is behind `FrameHost`, so the conversation is tested without one.
  */
-import type { AnalyseOptions, MeasureOptions, MeasureProgress, MeasureResult, PathingOptions, PathingProgress, PathingResult, ReplayTimeline, ScmSimStatus, TestRunOptions } from "../contract";
+import type { AnalyseOptions, MeasureOptions, MeasureProgress, MeasureResult, PathingOptions, PathingProgress, PathingResult, ReplayTimeline, ScmSimStatus, TestCopiesOptions, TestCopyResult, TestRunOptions } from "../contract";
 
 export interface Frame {
   post(message: object): void;
@@ -43,9 +46,11 @@ export interface BridgeWords {
   noMeasure: string;
   /** The page is from before a script's tests. */
   noTests: string;
+  /** The page cannot run copies of the game in step (from before them, or the browser cannot). */
+  noCopies: string;
 }
 
-interface Ready { version: number | null; pathing: number | null; measure: number | null; tests: number | null; files: ScmSimStatus["files"]; why: string | null }
+interface Ready { version: number | null; pathing: number | null; measure: number | null; tests: number | null; copies: number | null; files: ScmSimStatus["files"]; why: string | null }
 /** What the page said of a request on its way: its progress message, as it came. */
 type Heard = { stage?: unknown; frame?: unknown; frames?: unknown; done?: unknown; total?: unknown };
 interface Pending { resolve(v: unknown): void; reject(e: Error): void; progress?(m: Heard): void; done(): void }
@@ -78,12 +83,12 @@ export class Bridge {
     this.ready = new Promise<Ready>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error(this.words.noAnswer)), this.readyMs);
       this.frame = this.host(this.url, (data) => {
-        const m = data as Heard & { type?: unknown; id?: unknown; version?: unknown; pathing?: unknown; measure?: unknown; tests?: unknown; files?: unknown; why?: unknown; timeline?: unknown; message?: unknown } | null;
+        const m = data as Heard & { type?: unknown; id?: unknown; version?: unknown; pathing?: unknown; measure?: unknown; tests?: unknown; copies?: unknown; files?: unknown; why?: unknown; timeline?: unknown; message?: unknown } | null;
         if (!m || typeof m.type !== "string") return;
         if (m.type === "scmjs.sim.ready") {
           clearTimeout(timer);
           const files = m.files === "archives" || m.files === "copy" || m.files === "server" ? m.files : null;
-          resolve({ version: typeof m.version === "number" ? m.version : null, pathing: typeof m.pathing === "number" ? m.pathing : null, measure: typeof m.measure === "number" ? m.measure : null, tests: typeof m.tests === "number" ? m.tests : null, files, why: typeof m.why === "string" ? m.why : null });
+          resolve({ version: typeof m.version === "number" ? m.version : null, pathing: typeof m.pathing === "number" ? m.pathing : null, measure: typeof m.measure === "number" ? m.measure : null, tests: typeof m.tests === "number" ? m.tests : null, copies: typeof m.copies === "number" ? m.copies : null, files, why: typeof m.why === "string" ? m.why : null });
           return;
         }
         const p = typeof m.id === "number" ? this.pending.get(m.id) : undefined;
@@ -92,7 +97,7 @@ export class Bridge {
         else if (m.type === "scmjs.sim.result") { p.done(); p.resolve(m.timeline); }
         else if (m.type === "scmjs.sim.pathed") { p.done(); p.resolve((m as { pathing?: unknown }).pathing); }
         else if (m.type === "scmjs.sim.measured") { p.done(); p.resolve((m as { measure?: unknown }).measure); }
-        else if (m.type === "scmjs.sim.tested") { p.done(); p.resolve((m as { report?: unknown }).report); }
+        else if (m.type === "scmjs.sim.tested") { p.done(); const t = m as { report?: unknown; copies?: unknown }; p.resolve(Array.isArray(t.copies) ? t.copies : t.report); }
         else if (m.type === "scmjs.sim.error") { p.done(); p.reject(new Error(String(m.message ?? ""))); }
       });
     });
@@ -109,9 +114,9 @@ export class Bridge {
     if (this.pending.size === 0 && !this.opening) this.close();
     try {
       const r = await this.open();
-      return { available: r.files !== null, files: r.files, reason: r.files ? null : r.why ?? this.words.noFiles, timeline: r.version, pathing: r.pathing, measure: r.measure, tests: r.tests };
+      return { available: r.files !== null, files: r.files, reason: r.files ? null : r.why ?? this.words.noFiles, timeline: r.version, pathing: r.pathing, measure: r.measure, tests: r.tests, copies: r.copies };
     } catch (err) {
-      return { available: false, files: null, reason: err instanceof Error ? err.message : String(err), timeline: null, pathing: null, measure: null, tests: null };
+      return { available: false, files: null, reason: err instanceof Error ? err.message : String(err), timeline: null, pathing: null, measure: null, tests: null, copies: null };
     }
   }
 
@@ -139,6 +144,12 @@ export class Bridge {
   async test(scenario: Uint8Array, module: string, payload: unknown, options: TestRunOptions = {}): Promise<unknown> {
     const progress = options.onProgress && (() => options.onProgress!({ stage: "starting" }));
     return this.ask<unknown>(options.signal, progress, (id) => ({ type: "scmjs.sim.test", id, chk: scenario.slice(), module, payload }), (r) => (r.tests === null ? this.words.noTests : null));
+  }
+
+  /** A test of several players: a copy of the game each, in step; each copy's answer, in the order of `players`. */
+  async testCopies(scenario: Uint8Array, module: string, payload: unknown, options: TestCopiesOptions): Promise<TestCopyResult[]> {
+    const progress = options.onProgress && (() => options.onProgress!({ stage: "starting" }));
+    return this.ask<TestCopyResult[]>(options.signal, progress, (id) => ({ type: "scmjs.sim.test", id, chk: scenario.slice(), module, payload, players: [...options.players], triggers: options.triggers ?? null }), (r) => (r.copies === null ? this.words.noCopies : null));
   }
 
   /** One request to the page: `message` with its id, answered by a result, an error, or a cancel when `signal` aborts. */

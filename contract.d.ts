@@ -176,6 +176,12 @@ export interface ScmSimStatus {
    * is from before it (scm-sim with TrigScript 4's tests).
    */
   tests?: number | null;
+  /**
+   * The version of the request for a test of several players the engine's page answers (`testCopies`); null when it
+   * could not be asked, its page is from before it, or the browser cannot run copies of the game in step (they share
+   * memory, which Chrome and Edge from 137 allow there). From scm-sim 0.11.0.
+   */
+  copies?: number | null;
 }
 
 /* ── A map's measures (`ScmSimService.measure`) ── */
@@ -266,6 +272,29 @@ export interface MeasureOptions {
 export interface TestRunOptions {
   signal?: AbortSignal;
   onProgress?: (p: { stage: "starting" }) => void;
+}
+
+/** What `ScmSimService.testCopies` is told beside the map and the module. */
+export interface TestCopiesOptions extends TestRunOptions {
+  /** The slots of the players, one copy of the game each (P1 is 0); two to eight, each one the map opens to a person. */
+  players: number[];
+  /**
+   * The build's map of triggers (TrigScript's `triggerMap` lines): where eudplib's payload starts, and each trigger's
+   * offset in it, its numbers of conditions and actions, and the line it came from. Without it a report names no lines
+   * and eudplib's payload is not watched.
+   */
+  triggers?: { payload: number; triggers: [number, number, number, string][] } | null;
+}
+
+/** One copy's answer to `testCopies`: what the module's `drive` returned, or why it failed, and where the copies split. */
+export interface TestCopyResult {
+  result: unknown;
+  error: string | null;
+  /** Where the copies stopped agreeing (scm-sim's `DesyncReport`), as every copy reports it; null while they agreed. */
+  desync: unknown;
+  /** The frame the copy stood at, and the slot it played. */
+  frame: number;
+  player: number;
 }
 
 /* ── A map's pathing (`ScmSimService.pathing`) ── */
@@ -659,4 +688,12 @@ export interface ScmSimService {
    * that this function is there and that before offering it. From scm-sim 0.11.0.
    */
   test?(scenario: Uint8Array, module: string, payload: unknown, options?: TestRunOptions): Promise<unknown>;
+  /**
+   * A test of several players (TrigScript 4): a copy of the game for each of `options.players`, each seated as that
+   * player, kept in step as a game between people is (scm-sim `src/exact/copies.ts`), each running the module's
+   * `drive(game, payload)` over a handle that also knows the copies (`game.copy`: every player's screen, and where
+   * the copies stopped agreeing). Resolves with each copy's answer, in the order of `players`. A gigabyte of memory a
+   * copy. Needs a play page that answers it (`status().copies`): check both before offering it. From scm-sim 0.11.0.
+   */
+  testCopies?(scenario: Uint8Array, module: string, payload: unknown, options: TestCopiesOptions): Promise<TestCopyResult[]>;
 }

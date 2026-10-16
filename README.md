@@ -188,6 +188,28 @@ a StarEdit copy of the game is enough.
 
 A 4-player map's start locations plus two groups take about ten seconds.
 
+### `test(scenario, module, payload, options?)` and `testCopies(scenario, module, payload, options)`
+
+Since 0.11.0, and only where the play page answers them: check `status().tests` and
+`status().copies`. TrigScript uses these to run a script's tests in the game itself.
+
+`test` starts the map as Save builds it (a whole `.scx`) in the game, with EUD allowed and
+nothing drawn. It then imports `module`, the text of an ES module, and calls its
+`runGameTests(game, payload)`. The promise resolves with what that returns. The module
+runs with the play page's rights, so the page takes it only from an editor on the same
+site.
+
+`testCopies` is for a test of several players. It runs one copy of the game for each slot
+in `options.players`, each copy seated as that player. The copies are kept in step as in a
+real multiplayer game: each frame, every copy's commands reach all of them. Each copy
+calls the module's `drive(game, payload)`. Through `game.copy`, a test can read what every
+player was shown, and can find the frame at which the copies stopped agreeing (a desync),
+with the lines that caused it when `options.triggers` gives the build's map of triggers.
+
+You get back one answer per copy, in the order of `players`. Each copy uses about a
+gigabyte of memory. The copies share memory with each other, which Chrome and Edge allow on
+the play page from version 137. On other browsers `status().copies` is null.
+
 ### `view(element)`
 
 Since 0.5.0. The game itself, drawn inside an element of yours and filling it: a replay
