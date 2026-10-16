@@ -182,6 +182,11 @@ export interface ScmSimStatus {
    * memory, which Chrome and Edge from 137 allow there). From scm-sim 0.11.0.
    */
   copies?: number | null;
+  /**
+   * The version of the debugger's requests the engine's page answers (`debug`, a session's `picture`); null when it
+   * could not be asked or its page is from before it (scm-sim with TrigScript 4's debugger).
+   */
+  debug?: number | null;
 }
 
 /* ── A map's measures (`ScmSimService.measure`) ── */
@@ -285,6 +290,24 @@ export interface TestCopiesOptions extends TestRunOptions {
    */
   triggers?: { payload: number; triggers: [number, number, number, string][] } | null;
 }
+
+/**
+ * A test recorded for the debugger (`ScmSimService.debug`): what the module's `debugGameTest` wrote down of the run,
+ * and the run's game, held by the engine's page for pictures of its frames until `close()`. A new session ends the
+ * one before (each holds a game: a gigabyte).
+ */
+export interface ScmSimDebugSession {
+  /** The module's record of the run (TrigScript's `DebugRecording`), as it came. */
+  readonly recording: unknown;
+  /** The run's game at `frame` (clamped to the run), for a view to draw (`ScmSimView.show`). Rejects once the session is over. */
+  picture(frame: number, options?: { signal?: AbortSignal }): Promise<ScmSimPicture>;
+  close(): void;
+  /** The session is over: closed, a newer one began, or the engine's page was loaded afresh. */
+  readonly closed: boolean;
+}
+
+/** A debugged run's game at a frame: opaque, for a view that started the same map (`ScmSimView.debug`) to draw. */
+export interface ScmSimPicture { frame: number; kept: unknown }
 
 /** One copy's answer to `testCopies`: what the module's `drive` returned, or why it failed, and where the copies split. */
 export interface TestCopyResult {
@@ -696,4 +719,12 @@ export interface ScmSimService {
    * copy. Needs a play page that answers it (`status().copies`): check both before offering it. From scm-sim 0.11.0.
    */
   testCopies?(scenario: Uint8Array, module: string, payload: unknown, options: TestCopiesOptions): Promise<TestCopyResult[]>;
+  /**
+   * One of a script's tests recorded for the debugger (TrigScript 4, A5): as `test`, but the module's
+   * `debugGameTest(game, payload)` runs one test with everything written down, and the run's game stays with the
+   * engine's page for pictures of its frames (`ScmSimDebugSession.picture`). Nothing is drawn for the record, so any
+   * copy that runs `test` runs this; a picture is drawn by a view, under its own rule. Needs a play page that answers
+   * it (`status().debug`).
+   */
+  debug?(scenario: Uint8Array, module: string, payload: unknown, options?: TestRunOptions): Promise<ScmSimDebugSession>;
 }

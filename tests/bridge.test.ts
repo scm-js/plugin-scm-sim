@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { MeasureResult, PathingResult, ReplayTimeline } from "../contract";
 import { Bridge, type FrameHost } from "../src/bridge";
 
-const WORDS = { noAnswer: "no answer", noFiles: "no files", closed: "closed", noPathing: "no pathing", noMeasure: "no measure", noTests: "no tests", noCopies: "no copies" };
+const WORDS = { noAnswer: "no answer", noFiles: "no files", closed: "closed", noPathing: "no pathing", noMeasure: "no measure", noTests: "no tests", noCopies: "no copies", noDebug: "no debug", sessionOver: "session over" };
 const timeline = (frames: number) => ({ version: 1, frames } as ReplayTimeline);
 
 /** A stand-in for the engine's page: what it was sent, and a way to speak as it. */
@@ -22,9 +22,9 @@ const tick = () => new Promise<void>((r) => setTimeout(r, 0));
 describe("the conversation with the engine's page", () => {
   it("says whether a game can be run, from what the page says of the game's files", async () => {
     const yes = fakePage();
-    expect(await new Bridge("u", yes.host, WORDS).status()).toEqual({ available: true, files: "copy", reason: null, timeline: 1, pathing: null, measure: null, tests: null, copies: null });
+    expect(await new Bridge("u", yes.host, WORDS).status()).toEqual({ available: true, files: "copy", reason: null, timeline: 1, pathing: null, measure: null, tests: null, copies: null, debug: null });
     const no = fakePage({ type: "scmjs.sim.ready", version: 1, files: null, why: "install it" });
-    expect(await new Bridge("u", no.host, WORDS).status()).toEqual({ available: false, files: null, reason: "install it", timeline: 1, pathing: null, measure: null, tests: null, copies: null });
+    expect(await new Bridge("u", no.host, WORDS).status()).toEqual({ available: false, files: null, reason: "install it", timeline: 1, pathing: null, measure: null, tests: null, copies: null, debug: null });
     const newer = fakePage({ type: "scmjs.sim.ready", version: 4, pathing: 1, files: "copy" });
     expect(await new Bridge("u", newer.host, WORDS).status()).toMatchObject({ available: true, timeline: 4, pathing: 1 });
   });
@@ -189,6 +189,38 @@ describe("the conversation with the engine's page", () => {
     const { page, host } = fakePage({ type: "scmjs.sim.ready", version: 4, pathing: 1, files: "copy" });
     await expect(new Bridge("u", host, WORDS).measure(new Uint8Array(1), { starts: true })).rejects.toThrow("no measure");
     expect(page.sent).toEqual([]);
+  });
+
+  it("records a test for the debugger, keeps the page for its pictures, and ends the session on close", async () => {
+    const { page, host } = fakePage({ type: "scmjs.sim.ready", version: 1, tests: 1, debug: 1, files: "copy" });
+    const bridge = new Bridge("u", host, WORDS);
+    const got = bridge.debug(new Uint8Array([7]), "export const debugGameTest = 1", { test: "main.ts::a" });
+    await tick();
+    const asked = page.sent.find((m) => m.type === "scmjs.sim.debug")!;
+    expect(asked).toMatchObject({ module: "export const debugGameTest = 1", payload: { test: "main.ts::a" } });
+    page.say({ type: "scmjs.sim.debugged", id: asked.id, recording: { frames: 12 } });
+    const session = await got;
+    expect(session.recording).toEqual({ frames: 12 });
+    expect(session.closed).toBe(false);
+    // A status while a session holds a game does not load the page afresh (which would end it).
+    await bridge.status();
+    expect(page.removed).toBe(0);
+    const pic = session.picture(5);
+    await tick();
+    const p = page.sent.find((m) => m.type === "scmjs.sim.picture")!;
+    expect(p).toMatchObject({ session: asked.id, frame: 5 });
+    page.say({ type: "scmjs.sim.pictured", id: p.id, frame: 5, kept: { base: "b" } });
+    expect(await pic).toEqual({ frame: 5, kept: { base: "b" } });
+    session.close();
+    expect(session.closed).toBe(true);
+    expect(page.sent.at(-1)).toEqual({ type: "scmjs.sim.cancel", id: asked.id });
+    await expect(session.picture(6)).rejects.toThrow("session over");
+  });
+
+  it("refuses the debugger on a page from before it, asking nothing", async () => {
+    const { page, host } = fakePage({ type: "scmjs.sim.ready", version: 1, tests: 1, files: "copy" });
+    await expect(new Bridge("u", host, WORDS).debug(new Uint8Array([1]), "m", {})).rejects.toThrow("no debug");
+    expect(page.sent.filter((m) => m.type === "scmjs.sim.debug")).toEqual([]);
   });
 
   it("tells whatever was running when it is closed", async () => {
