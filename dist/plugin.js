@@ -42,7 +42,7 @@ var Bridge = class {
         if (m.type === "scmjs.sim.ready") {
           clearTimeout(timer);
           const files2 = m.files === "archives" || m.files === "copy" || m.files === "server" ? m.files : null;
-          resolve({ version: typeof m.version === "number" ? m.version : null, pathing: typeof m.pathing === "number" ? m.pathing : null, files: files2, why: typeof m.why === "string" ? m.why : null });
+          resolve({ version: typeof m.version === "number" ? m.version : null, pathing: typeof m.pathing === "number" ? m.pathing : null, measure: typeof m.measure === "number" ? m.measure : null, files: files2, why: typeof m.why === "string" ? m.why : null });
           return;
         }
         const p = typeof m.id === "number" ? this.pending.get(m.id) : void 0;
@@ -54,6 +54,9 @@ var Bridge = class {
         } else if (m.type === "scmjs.sim.pathed") {
           p.done();
           p.resolve(m.pathing);
+        } else if (m.type === "scmjs.sim.measured") {
+          p.done();
+          p.resolve(m.measure);
         } else if (m.type === "scmjs.sim.error") {
           p.done();
           p.reject(new Error(String(m.message ?? "")));
@@ -75,9 +78,9 @@ var Bridge = class {
     if (this.pending.size === 0 && !this.opening) this.close();
     try {
       const r = await this.open();
-      return { available: r.files !== null, files: r.files, reason: r.files ? null : r.why ?? this.words.noFiles, timeline: r.version, pathing: r.pathing };
+      return { available: r.files !== null, files: r.files, reason: r.files ? null : r.why ?? this.words.noFiles, timeline: r.version, pathing: r.pathing, measure: r.measure };
     } catch (err) {
-      return { available: false, files: null, reason: err instanceof Error ? err.message : String(err), timeline: null, pathing: null };
+      return { available: false, files: null, reason: err instanceof Error ? err.message : String(err), timeline: null, pathing: null, measure: null };
     }
   }
   async analyse(replay, options = {}) {
@@ -89,6 +92,12 @@ var Bridge = class {
     const { signal, onProgress, ...asked } = options;
     const progress = onProgress && ((m) => onProgress({ stage: m.stage === "walking" ? "walking" : "starting", done: Number(m.done) || 0, total: Number(m.total) || 0 }));
     return this.ask(signal, progress, (id) => ({ type: "scmjs.sim.pathing", id, chk: scenario.slice(), options: asked }), (r) => r.pathing === null ? this.words.noPathing : null);
+  }
+  /** A map's measures: `scenario` is the bare scenario (.chk bytes). */
+  async measure(scenario, options = {}) {
+    const { signal, onProgress, ...asked } = options;
+    const progress = onProgress && ((m) => onProgress({ stage: m.stage === "measuring" ? "measuring" : "starting", done: Number(m.done) || 0, total: Number(m.total) || 0 }));
+    return this.ask(signal, progress, (id) => ({ type: "scmjs.sim.measure", id, chk: scenario.slice(), options: asked }), (r) => r.measure === null ? this.words.noMeasure : null);
   }
   /** One request to the page: `message` with its id, answered by a result, an error, or a cancel when `signal` aborts. */
   async ask(signal, progress, message, refuse) {
@@ -572,7 +581,8 @@ var KO = {
   "The engine runs in your browser from your own copy of StarCraft. A replay or a map handed to it is not stored and not sent anywhere.": "\uC5D4\uC9C4\uC740 \uC0AC\uC6A9\uC790\uC758 StarCraft \uBCF5\uC0AC\uBCF8\uC744 \uC0AC\uC6A9\uD574 \uBE0C\uB77C\uC6B0\uC800 \uC548\uC5D0\uC11C \uC2E4\uD589\uB429\uB2C8\uB2E4. \uC5D4\uC9C4\uC5D0 \uB118\uAE34 \uB9AC\uD50C\uB808\uC774\uB098 \uB9F5\uC740 \uC800\uC7A5\uB418\uC9C0 \uC54A\uC73C\uBA70 \uC5B4\uB514\uB85C\uB3C4 \uC804\uC1A1\uB418\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.",
   "The engine was closed before it finished.": "\uC5D4\uC9C4\uC774 \uB05D\uB098\uAE30 \uC804\uC5D0 \uB2EB\uD614\uC2B5\uB2C8\uB2E4.",
   "The engine's page cannot work out a map's pathing yet. Reload the editor and try again.": "\uC5D4\uC9C4 \uD398\uC774\uC9C0\uAC00 \uC544\uC9C1 \uB9F5\uC758 \uACBD\uB85C\uB97C \uACC4\uC0B0\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4. \uD3B8\uC9D1\uAE30\uB97C \uC0C8\uB85C \uACE0\uCE5C \uB4A4 \uB2E4\uC2DC \uC2DC\uB3C4\uD558\uC138\uC694.",
-  "There is no map open to work out the pathing of.": "\uACBD\uB85C\uB97C \uACC4\uC0B0\uD560 \uC5F4\uB9B0 \uB9F5\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.",
+  "There is no map open.": "\uC5F4\uB9B0 \uB9F5\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.",
+  "The engine's page cannot measure a map yet. Reload the editor and try again.": "\uC5D4\uC9C4 \uD398\uC774\uC9C0\uAC00 \uC544\uC9C1 \uB9F5\uC744 \uCE21\uC815\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4. \uD3B8\uC9D1\uAE30\uB97C \uC0C8\uB85C \uACE0\uCE5C \uB4A4 \uB2E4\uC2DC \uC2DC\uB3C4\uD558\uC138\uC694.",
   "Another replay was loaded in its place.": "\uADF8 \uC790\uB9AC\uC5D0 \uB2E4\uB978 \uB9AC\uD50C\uB808\uC774\uB97C \uBD88\uB7EC\uC654\uC2B5\uB2C8\uB2E4.",
   "The game view was closed.": "\uAC8C\uC784 \uD654\uBA74\uC774 \uB2EB\uD614\uC2B5\uB2C8\uB2E4.",
   "The engine's page did not answer.": "\uC5D4\uC9C4 \uD398\uC774\uC9C0\uAC00 \uC751\uB2F5\uD558\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4.",
@@ -602,7 +612,8 @@ function activate(api) {
     noAnswer: t("The engine's page did not answer."),
     noFiles: t("This browser has no copy of StarCraft to play from. Give the site your game on the Game Data page."),
     closed: t("The engine was closed before it finished."),
-    noPathing: t("The engine's page cannot work out a map's pathing yet. Reload the editor and try again.")
+    noPathing: t("The engine's page cannot work out a map's pathing yet. Reload the editor and try again."),
+    noMeasure: t("The engine's page cannot measure a map yet. Reload the editor and try again.")
   });
   const tab = address && new PlayTab(address, {
     blocked: t("The browser did not let the play page open. Allow pop-ups for this site and try again."),
@@ -618,10 +629,15 @@ function activate(api) {
     };
     return tab.play(map ?? open(), playHow(settings()));
   };
+  const openScenario = async () => {
+    const file = api.document.isOpen() ? await api.document.export({ format: "chk", built: false }) : null;
+    if (!file) throw new Error(t("There is no map open."));
+    return new Uint8Array(await file.arrayBuffer());
+  };
   const views = /* @__PURE__ */ new Set();
   const service = {
     present: address !== null,
-    status: async () => bridge ? bridge.status() : { available: false, files: null, reason: absent().message, timeline: null, pathing: null },
+    status: async () => bridge ? bridge.status() : { available: false, files: null, reason: absent().message, timeline: null, pathing: null, measure: null },
     analyse: async (replay, options) => {
       if (!bridge) throw absent();
       return bridge.analyse(replay, options);
@@ -631,12 +647,11 @@ function activate(api) {
     },
     pathing: async (scenario, options) => {
       if (!bridge) throw absent();
-      if (!scenario) {
-        const file = api.document.isOpen() ? await api.document.export({ format: "chk", built: false }) : null;
-        if (!file) throw new Error(t("There is no map open to work out the pathing of."));
-        scenario = new Uint8Array(await file.arrayBuffer());
-      }
-      return bridge.pathing(scenario, options);
+      return bridge.pathing(scenario ?? await openScenario(), options);
+    },
+    measure: async (scenario, options) => {
+      if (!bridge) throw absent();
+      return bridge.measure(scenario ?? await openScenario(), options);
     },
     view: (element) => {
       if (!address) throw absent();

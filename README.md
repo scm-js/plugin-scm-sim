@@ -160,6 +160,34 @@ Options:
 - `limit` and `every`: the frames a walk may take, and how often its position is kept.
 - `signal` and `onProgress`: as for `analyse`.
 
+### `measure(scenario?, options?)`
+
+Since 0.8.0, and only where the play page answers it: `status().measure` is a number
+there and null on an older page. Check for both before offering it.
+
+Measures of a map taken by the game itself. Leave `scenario` out for the open map, or
+pass a bare scenario (`.chk` bytes). As for `pathing`, nothing is shown, nobody plays, and
+a StarEdit copy of the game is enough.
+
+- **Groups** (`groups`): `count` units of a type (at most 12, one selection) made at `from`.
+  The one nearest `to` walks there alone, then the whole group walks there together, both
+  from the same moment. Each is timed as it gets *through*: two tiles past the middle of
+  the way, where the choke is when `from` and `to` are its two ends. Timing there, and not
+  at `to`, leaves out the jostling of a group for one point after it is through. For each
+  group you get the frames for the one alone (`alone`), for the first and the last of the
+  group (`first`, `last`), and how many got through or got stuck. `last − alone` is the
+  time the group spent queueing: through a choke, the price of its width. Groups near each other run in different games, so a group standing idle
+  is never in another's way.
+- **Bases** (`bases`, and `starts: true` for every start location): a Nexus on the hall
+  spot and 24 Probes waiting a few tiles away. For each worker count (`workers`, default
+  8, 16 and 24), that many Probes are sent to the base's mineral fields, nearest first, and
+  after 25 seconds the minerals taken from the base's own fields are counted for two game
+  minutes. The result is `perMinute` at each count. A spot the game will not take a Nexus
+  on is reported (`hallMade: false`). Gas is not measured, because a trigger cannot
+  build an Assimilator.
+
+A 4-player map's start locations plus two groups take about ten seconds.
+
 ### `view(element)`
 
 Since 0.5.0. The game itself, drawn inside an element of yours and filling it: a replay
