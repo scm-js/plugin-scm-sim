@@ -37,6 +37,7 @@ export function activate(api: PluginApi): () => void {
     noPathing: t("The engine's page cannot work out a map's pathing yet. Reload the editor and try again."),
     noMeasure: t("The engine's page cannot measure a map yet. Reload the editor and try again."),
     noTests: t("The engine's page cannot run a script's tests in the game yet. Reload the editor and try again."),
+    noCopies: t("A test of several players runs a copy of the game for each, which needs memory shared between them: this browser does not allow that on the engine's page (Chrome and Edge from version 137 do), or the page is from before it."),
   });
   const tab = address && new PlayTab(address, {
     blocked: t("The browser did not let the play page open. Allow pop-ups for this site and try again."),
@@ -64,7 +65,7 @@ export function activate(api: PluginApi): () => void {
   const views = new Set<ViewBridge>();
   const service: ScmSimService = {
     present: address !== null,
-    status: async () => bridge ? bridge.status() : { available: false, files: null, reason: absent().message, timeline: null, pathing: null, measure: null, tests: null },
+    status: async () => bridge ? bridge.status() : { available: false, files: null, reason: absent().message, timeline: null, pathing: null, measure: null, tests: null, copies: null },
     analyse: async (replay, options) => { if (!bridge) throw absent(); return bridge.analyse(replay, options); },
     play: async (map) => { await test(map); },
     pathing: async (scenario, options) => {
@@ -76,6 +77,7 @@ export function activate(api: PluginApi): () => void {
       return bridge.measure(scenario ?? await openScenario(), options);
     },
     test: async (scenario, module, payload, options) => { if (!bridge) throw absent(); return bridge.test(scenario, module, payload, options); },
+    testCopies: async (scenario, module, payload, options) => { if (!bridge) throw absent(); return bridge.testCopies(scenario, module, payload, options); },
     view: (element) => {
       if (!address) throw absent();
       const view = new ViewBridge(address.view, element, domViewFrames(address.origin), {
