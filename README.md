@@ -210,7 +210,7 @@ view.dispose();
 
 `camera(x, y)` looks at a point of the map in pixels and `player(slot)` picks whose eyes
 the fog is drawn through. Since 0.6.0, `camera(x, y, height)` also sets how much of the map
-shows top to bottom, from 240 to 960 pixels (the game's own view is 480), so the game can
+shows top to bottom, from 240 to 1920 pixels (960 before 0.9.0; the game's own view is 480), so the game can
 match the scale of the map it replaces. This works only while the console is hidden, and it
 is hidden unless you ask for it with `options({ console: true })`. `onUnits` hears the
 squares the game's minimap would draw (each one's middle and size in map pixels, and its
@@ -238,7 +238,10 @@ game is seen through can see.
 
 A key pressed while the view has the keyboard and that it does
 not use itself (all but the arrows, which scroll) comes to `onKey` and is pressed again on
-the editor's window, so the editor's hotkeys and every plugin's still work. Inside the
+the editor's window, so the editor's hotkeys and every plugin's still work. Since 0.9.0 the
+wheel over the view comes to `onWheel`, with the map pixel under the pointer: the game does
+nothing with it, and keeps Ctrl and the wheel from zooming the browser's tab, so hand it to
+the editor's map view (`view.wheel(w)`) and the game zooms the way the map does. Inside the
 editor, `api.ui.mapView` is the place for the element: it is never moved, so the game is
 not started again when the person switches to the map and back.
 
