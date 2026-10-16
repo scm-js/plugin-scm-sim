@@ -3,7 +3,7 @@
  * the way from the editor to scm-sim, the game engine behind the site's play page. It has
  * no editor of its own and no engine in it; it holds one service, `scm-sim.engine`, that
  * other plugins reach the engine through — a replay played to its end for what happened
- * in it, a map started in a browser tab — one menu item, Tools ▸ Test Map in Browser, and
+ * in it, a map's pathing as the game walks it, a map started in a browser tab — one menu item, Tools ▸ Test Map in Browser, and
  * a page under Edit ▸ Preferences ▸ Plugins: whether the engine can run a game, and how
  * Test Map in Browser plays the map (`src/settings.ts`). The engine is another program on the editor's own origin, talked to by message
  * (`src/bridge.ts`, `src/play.ts`). See `contract.d.ts` for the service and README.md for
@@ -34,6 +34,7 @@ export function activate(api: PluginApi): () => void {
     noAnswer: t("The engine's page did not answer."),
     noFiles: t("This browser has no copy of StarCraft to play from. Give the site your game on the Game Data page."),
     closed: t("The engine was closed before it finished."),
+    noPathing: t("The engine's page cannot work out a map's pathing yet. Reload the editor and try again."),
   });
   const tab = address && new PlayTab(address, {
     blocked: t("The browser did not let the play page open. Allow pop-ups for this site and try again."),
@@ -54,9 +55,19 @@ export function activate(api: PluginApi): () => void {
   const views = new Set<ViewBridge>();
   const service: ScmSimService = {
     present: address !== null,
-    status: async () => bridge ? bridge.status() : { available: false, files: null, reason: absent().message, timeline: null },
+    status: async () => bridge ? bridge.status() : { available: false, files: null, reason: absent().message, timeline: null, pathing: null },
     analyse: async (replay, options) => { if (!bridge) throw absent(); return bridge.analyse(replay, options); },
     play: async (map) => { await test(map); },
+    pathing: async (scenario, options) => {
+      if (!bridge) throw absent();
+      // Left out: the open map as the editor holds it (its build steps change triggers, not the ground).
+      if (!scenario) {
+        const file = api.document.isOpen() ? await api.document.export({ format: "chk", built: false }) : null;
+        if (!file) throw new Error(t("There is no map open to work out the pathing of."));
+        scenario = new Uint8Array(await file.arrayBuffer());
+      }
+      return bridge.pathing(scenario, options);
+    },
     view: (element) => {
       if (!address) throw absent();
       const view = new ViewBridge(address.view, element, domViewFrames(address.origin), {

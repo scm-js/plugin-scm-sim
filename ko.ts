@@ -24,6 +24,8 @@ export const KO: Record<string, string> = {
   "The engine cannot run a game here.": "여기서는 엔진이 게임을 실행할 수 없습니다.",
   "The engine runs in your browser from your own copy of StarCraft. A replay or a map handed to it is not stored and not sent anywhere.": "엔진은 사용자의 StarCraft 복사본을 사용해 브라우저 안에서 실행됩니다. 엔진에 넘긴 리플레이나 맵은 저장되지 않으며 어디로도 전송되지 않습니다.",
   "The engine was closed before it finished.": "엔진이 끝나기 전에 닫혔습니다.",
+  "The engine's page cannot work out a map's pathing yet. Reload the editor and try again.": "엔진 페이지가 아직 맵의 경로를 계산할 수 없습니다. 편집기를 새로 고친 뒤 다시 시도하세요.",
+  "There is no map open to work out the pathing of.": "경로를 계산할 열린 맵이 없습니다.",
   "Another replay was loaded in its place.": "그 자리에 다른 리플레이를 불러왔습니다.",
   "The game view was closed.": "게임 화면이 닫혔습니다.",
   "The engine's page did not answer.": "엔진 페이지가 응답하지 않았습니다.",
