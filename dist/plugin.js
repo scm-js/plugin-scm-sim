@@ -168,6 +168,7 @@ var ViewBridge = class {
   keys = /* @__PURE__ */ new Set();
   units = /* @__PURE__ */ new Set();
   hovers = /* @__PURE__ */ new Set();
+  wheels = /* @__PURE__ */ new Set();
   closed = false;
   constructor(url, element, host, words, readyMs = 3e4) {
     this.words = words;
@@ -233,6 +234,12 @@ var ViewBridge = class {
         case "scmjs.view.hover": {
           const h = hoverOf(m);
           for (const l of this.hovers) l(h);
+          return;
+        }
+        case "scmjs.view.wheel": {
+          const n = (v) => typeof v === "number" && Number.isFinite(v) ? v : 0;
+          const w = { deltaX: n(m.deltaX), deltaY: n(m.deltaY), deltaMode: n(m.deltaMode), ctrlKey: m.ctrlKey === true, metaKey: m.metaKey === true, shiftKey: m.shiftKey === true, altKey: m.altKey === true, x: n(m.x), y: n(m.y) };
+          for (const l of this.wheels) l(w);
           return;
         }
         case "scmjs.view.key": {
@@ -303,6 +310,9 @@ var ViewBridge = class {
   onHover(listener) {
     return this.listen(this.hovers, listener);
   }
+  onWheel(listener) {
+    return this.listen(this.wheels, listener);
+  }
   dispose() {
     if (this.closed) return;
     this.closed = true;
@@ -314,6 +324,7 @@ var ViewBridge = class {
     this.keys.clear();
     this.units.clear();
     this.hovers.clear();
+    this.wheels.clear();
     this.frame.remove();
   }
 };

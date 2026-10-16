@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ViewCamera, ViewFrame, ViewHover, ViewKey, ViewUnits } from "../contract";
+import type { ViewCamera, ViewFrame, ViewHover, ViewKey, ViewUnits, ViewWheel } from "../contract";
 import { ViewBridge, type ViewFrameHost } from "../src/view";
 
 const WORDS = { noAnswer: "no answer", noFiles: "no files", replaced: "replaced", closed: "closed" };
@@ -134,6 +134,19 @@ describe("the game view inside an element", () => {
     page.say({ type: "scmjs.view.hover", unit: { ...unit, work: "dance", queue: [0, "x", -1] }, x: 1, y: 2 });
     page.say({ type: "scmjs.view.hover", unit: null });
     expect(heard).toEqual([{ unit, x: 120, y: 80 }, { unit: { ...unit, work: null, queue: [0] }, x: 1, y: 2 }, null]);
+  });
+
+  it("passes on the wheel, checked", () => {
+    const { page, host } = fakeViewer();
+    const view = new ViewBridge("u", element, host, WORDS);
+    const heard: ViewWheel[] = [];
+    view.onWheel((w) => heard.push(w));
+    page.say({ type: "scmjs.view.wheel", deltaX: 0, deltaY: -100, deltaMode: 0, ctrlKey: true, metaKey: false, shiftKey: false, altKey: false, x: 1500, y: 1200 });
+    page.say({ type: "scmjs.view.wheel", deltaY: "3", ctrlKey: 1, x: Infinity, y: 7 });
+    expect(heard).toEqual([
+      { deltaX: 0, deltaY: -100, deltaMode: 0, ctrlKey: true, metaKey: false, shiftKey: false, altKey: false, x: 1500, y: 1200 },
+      { deltaX: 0, deltaY: 0, deltaMode: 0, ctrlKey: false, metaKey: false, shiftKey: false, altKey: false, x: 0, y: 7 },
+    ]);
   });
 
   it("sends a camera track as a copy, and null to stop following", () => {

@@ -508,6 +508,23 @@ export interface ViewKey {
 }
 
 /**
+ * A wheel turned over the view, which does nothing with it itself: as the browser's `WheelEvent`
+ * has it, and `x`, `y` the map pixel under the pointer — enough for the editor's map view to zoom
+ * by its own rule (`MapViewHandle.wheel`).
+ */
+export interface ViewWheel {
+  deltaX: number;
+  deltaY: number;
+  deltaMode: number;
+  ctrlKey: boolean;
+  metaKey: boolean;
+  shiftKey: boolean;
+  altKey: boolean;
+  x: number;
+  y: number;
+}
+
+/**
  * The game itself, drawn by the play page inside an element of yours (`ScmSimService.view`):
  * the replay played out with the game's own graphics, Remastered's where the person's copy
  * has them, and its console. You drive it; it says what it shows.
@@ -524,7 +541,7 @@ export interface ScmSimView {
   seek(frame: number): void;
   /**
    * Looks at this point of the map (pixels: the middle of the view). With `height`, shows that
-   * much of the map top to bottom (pixels, 240 to 960; the game's own 480 at first), so the view
+   * much of the map top to bottom (pixels, 240 to 1920 — to 960 before scm-sim 0.9.0; the game's own 480 at first), so the view
    * can match another's scale — without the console only.
    */
   camera(x: number, y: number, height?: number): void;
@@ -543,6 +560,8 @@ export interface ScmSimView {
   onUnits(listener: (units: ViewUnits) => void): Disposable;
   /** The unit under the pointer, for a tooltip; null once the pointer is on nothing (and when it leaves the view). From scm-sim 0.6.0. */
   onHover(listener: (hover: ViewHover | null) => void): Disposable;
+  /** The wheel turned over the view (Ctrl and the wheel included: the page keeps it from the browser's own zoom). From scm-sim 0.9.0. */
+  onWheel(listener: (wheel: ViewWheel) => void): Disposable;
   /**
    * A key the view handed back. It is also pressed again on the editor's window, so the
    * editor's hotkeys and every plugin's act on it as if it had been pressed there.

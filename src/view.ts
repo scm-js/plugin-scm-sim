@@ -11,7 +11,7 @@
  * One load at a time: a load asked for while another is on its way replaces it, and the first is rejected. Nothing
  * here touches the DOM directly: the frame is behind `ViewFrameHost`, so the conversation is tested without one.
  */
-import type { Disposable, ScmSimView, ViewCamera, ViewFrame, ViewHover, ViewHoverUnit, ViewKey, ViewLooks, ViewOptions, ViewReady, ViewTrack, ViewUnits, ViewedReplay } from "../contract";
+import type { Disposable, ScmSimView, ViewCamera, ViewFrame, ViewHover, ViewHoverUnit, ViewKey, ViewLooks, ViewOptions, ViewReady, ViewTrack, ViewUnits, ViewWheel, ViewedReplay } from "../contract";
 
 export interface HostedFrame {
   post(message: object): void;
@@ -44,6 +44,7 @@ export class ViewBridge implements ScmSimView {
   private readonly keys = new Set<Listener<ViewKey>>();
   private readonly units = new Set<Listener<ViewUnits>>();
   private readonly hovers = new Set<Listener<ViewHover | null>>();
+  private readonly wheels = new Set<Listener<ViewWheel>>();
   private closed = false;
 
   constructor(url: string, element: HTMLElement, host: ViewFrameHost, words: ViewWords, readyMs = 30000) {
@@ -93,6 +94,12 @@ export class ViewBridge implements ScmSimView {
           return;
         }
         case "scmjs.view.hover": { const h = hoverOf(m); for (const l of this.hovers) l(h); return; }
+        case "scmjs.view.wheel": {
+          const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+          const w: ViewWheel = { deltaX: n(m.deltaX), deltaY: n(m.deltaY), deltaMode: n(m.deltaMode), ctrlKey: m.ctrlKey === true, metaKey: m.metaKey === true, shiftKey: m.shiftKey === true, altKey: m.altKey === true, x: n(m.x), y: n(m.y) };
+          for (const l of this.wheels) l(w);
+          return;
+        }
         case "scmjs.view.key": {
           const k: ViewKey = { key: String(m.key ?? ""), code: String(m.code ?? ""), shiftKey: m.shiftKey === true, ctrlKey: m.ctrlKey === true, altKey: m.altKey === true, metaKey: m.metaKey === true };
           for (const l of this.keys) l(k);
@@ -139,6 +146,7 @@ export class ViewBridge implements ScmSimView {
   onKey(listener: Listener<ViewKey>): Disposable { return this.listen(this.keys, listener); }
   onUnits(listener: Listener<ViewUnits>): Disposable { return this.listen(this.units, listener); }
   onHover(listener: Listener<ViewHover | null>): Disposable { return this.listen(this.hovers, listener); }
+  onWheel(listener: Listener<ViewWheel>): Disposable { return this.listen(this.wheels, listener); }
 
   dispose(): void {
     if (this.closed) return;
@@ -146,7 +154,7 @@ export class ViewBridge implements ScmSimView {
     this.loading?.reject(new Error(this.words.closed));
     this.loading = null;
     this.looksWaiting.length = 0;
-    this.frames.clear(); this.cameras.clear(); this.keys.clear(); this.units.clear(); this.hovers.clear();
+    this.frames.clear(); this.cameras.clear(); this.keys.clear(); this.units.clear(); this.hovers.clear(); this.wheels.clear();
     this.frame.remove();
   }
 }
