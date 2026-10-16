@@ -656,7 +656,7 @@ export interface ScmSimService {
    * which this resolves with. Nothing is drawn and nobody plays. One request runs at a time,
    * replays included. The module runs with the engine page's rights; it is taken only from the
    * editor of the same origin. Needs a play page that answers it (`status().tests`): check both
-   * that this function is there and that before offering it.
+   * that this function is there and that before offering it. From scm-sim 0.11.0.
    */
   test?(scenario: Uint8Array, module: string, payload: unknown, options?: TestRunOptions): Promise<unknown>;
 }
