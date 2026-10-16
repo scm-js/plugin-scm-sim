@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ViewCamera, ViewFrame, ViewHover, ViewKey, ViewUnits, ViewPointer, ViewWheel } from "../contract";
 import { ViewBridge, type ViewFrameHost } from "../src/view";
 
-const WORDS = { noAnswer: "no answer", noFiles: "no files", replaced: "replaced", closed: "closed" };
+const WORDS = { noAnswer: "no answer", noFiles: "no files", replaced: "replaced", closed: "closed", noDebug: "no debug" };
 const element = {} as HTMLElement;
 
 /** A stand-in for the play page's viewer: what it was sent, and a way to speak as it. */
@@ -22,6 +22,39 @@ const LOOKS = { remastered: true, remasteredOn: true, lighting: false, lightingO
 const LOADED = { type: "scmjs.view.loaded", name: "a.rep", frames: 900, players: [{ slot: 0, name: "A", race: 1 }], map: { width: 128, height: 96 }, rewinds: true, looks: LOOKS };
 
 describe("the game view inside an element", () => {
+  it("starts a debugged run's map and draws its pictures, saying an error no request waits on", async () => {
+    const { page, host } = fakeViewer({ type: "scmjs.view.ready", version: 1, debug: 1, files: "copy" });
+    const view = new ViewBridge("u", element, host, WORDS);
+    const map = new Uint8Array([9]);
+    const started = view.debug(map);
+    await tick();
+    expect(page.sent[0]).toMatchObject({ type: "scmjs.view.debug" });
+    expect(page.sent[0].map).toEqual(map);
+    expect(page.sent[0].map).not.toBe(map);
+    page.say({ type: "scmjs.view.debugged", map: { width: 64, height: 64 } });
+    expect(await started).toEqual({ map: { width: 64, height: 64 } });
+    const shown: number[] = [], errors: string[] = [];
+    view.onShown((f) => shown.push(f));
+    view.onError((e) => errors.push(e));
+    view.show({ frame: 12, kept: { base: "b" } });
+    expect(page.sent.at(-1)).toEqual({ type: "scmjs.view.show", kept: { base: "b" } });
+    page.say({ type: "scmjs.view.shown", frame: 12 });
+    page.say({ type: "scmjs.view.error", message: "another map" });
+    expect(shown).toEqual([12]);
+    expect(errors).toEqual(["another map"]);
+    // A refusal of the map itself goes to the request.
+    const again = view.debug(map);
+    await tick();
+    page.say({ type: "scmjs.view.error", message: "Playing needs StarCraft installed" });
+    await expect(again).rejects.toThrow("Playing needs StarCraft installed");
+  });
+
+  it("refuses a debugged run's map on a page from before the debugger", async () => {
+    const { page, host } = fakeViewer();
+    await expect(new ViewBridge("u", element, host, WORDS).debug(new Uint8Array([1]))).rejects.toThrow("no debug");
+    expect(page.sent).toEqual([]);
+  });
+
   it("is made in the element given and says what the page found of the game's files", async () => {
     const yes = fakeViewer();
     const view = new ViewBridge("u", element, yes.host, WORDS);

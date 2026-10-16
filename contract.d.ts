@@ -171,6 +171,22 @@ export interface ScmSimStatus {
    * asked or its page is from before `measure` (scm-sim 0.8.0).
    */
   measure: number | null;
+  /**
+   * The version of the test request the engine's page answers (`test`); null when it could not be asked or its page
+   * is from before it (scm-sim with TrigScript 4's tests).
+   */
+  tests?: number | null;
+  /**
+   * The version of the request for a test of several players the engine's page answers (`testCopies`); null when it
+   * could not be asked, its page is from before it, or the browser cannot run copies of the game in step (they share
+   * memory, which Chrome and Edge from 137 allow there). From scm-sim 0.11.0.
+   */
+  copies?: number | null;
+  /**
+   * The version of the debugger's requests the engine's page answers (`debug`, a session's `picture`); null when it
+   * could not be asked or its page is from before it (scm-sim with TrigScript 4's debugger).
+   */
+  debug?: number | null;
 }
 
 /* ── A map's measures (`ScmSimService.measure`) ── */
@@ -255,6 +271,53 @@ export interface MeasureOptions {
   limit?: number;
   signal?: AbortSignal;
   onProgress?: (progress: MeasureProgress) => void;
+}
+
+/** What `ScmSimService.test` may be told beside the map and the module. */
+export interface TestRunOptions {
+  signal?: AbortSignal;
+  onProgress?: (p: { stage: "starting" }) => void;
+}
+
+/** What `ScmSimService.testCopies` is told beside the map and the module. */
+export interface TestCopiesOptions extends TestRunOptions {
+  /** The slots of the players, one copy of the game each (P1 is 0); two to eight, each one the map opens to a person. */
+  players: number[];
+  /**
+   * The build's map of triggers (TrigScript's `triggerMap` lines): where eudplib's payload starts, and each trigger's
+   * offset in it, its numbers of conditions and actions, and the line it came from. Without it a report names no lines
+   * and eudplib's payload is not watched.
+   */
+  triggers?: { payload: number; triggers: [number, number, number, string][] } | null;
+}
+
+/**
+ * A test recorded for the debugger (`ScmSimService.debug`): what the module's `debugGameTest` wrote down of the run,
+ * and the run's game, held by the engine's page for pictures of its frames until `close()`. A new session ends the
+ * one before (each holds a game: a gigabyte).
+ */
+export interface ScmSimDebugSession {
+  /** The module's record of the run (TrigScript's `DebugRecording`), as it came. */
+  readonly recording: unknown;
+  /** The run's game at `frame` (clamped to the run), for a view to draw (`ScmSimView.show`). Rejects once the session is over. */
+  picture(frame: number, options?: { signal?: AbortSignal }): Promise<ScmSimPicture>;
+  close(): void;
+  /** The session is over: closed, a newer one began, or the engine's page was loaded afresh. */
+  readonly closed: boolean;
+}
+
+/** A debugged run's game at a frame: opaque, for a view that started the same map (`ScmSimView.debug`) to draw. */
+export interface ScmSimPicture { frame: number; kept: unknown }
+
+/** One copy's answer to `testCopies`: what the module's `drive` returned, or why it failed, and where the copies split. */
+export interface TestCopyResult {
+  result: unknown;
+  error: string | null;
+  /** Where the copies stopped agreeing (scm-sim's `DesyncReport`), as every copy reports it; null while they agreed. */
+  desync: unknown;
+  /** The frame the copy stood at, and the slot it played. */
+  frame: number;
+  player: number;
 }
 
 /* ── A map's pathing (`ScmSimService.pathing`) ── */
@@ -578,6 +641,18 @@ export interface ScmSimView {
    * editor's hotkeys and every plugin's act on it as if it had been pressed there.
    */
   onKey(listener: (key: ViewKey) => void): Disposable;
+  /**
+   * A debugged run's built map (TrigScript 4, A5; the whole .scx `ScmSimService.debug` was given): started as the
+   * engine's page started it for the record, so that the run's pictures (`show`) can be drawn here. The view then
+   * never plays. Rejects on a play page from before it, and where the person's copy of the game may only watch (a
+   * picture of a map's run is the map played).
+   */
+  debug?(map: Uint8Array): Promise<{ map: { width: number; height: number } }>;
+  /** Draws a picture of the debugged run as it stands (`ScmSimDebugSession.picture`); `onShown` hears its frame once up. */
+  show?(picture: ScmSimPicture): void;
+  onShown?(listener: (frame: number) => void): Disposable;
+  /** What went wrong with no request waiting on it: a picture that could not be drawn. */
+  onError?(listener: (message: string) => void): Disposable;
   /** Takes the frame away and the engine with it. */
   dispose(): void;
 }
@@ -636,4 +711,32 @@ export interface ScmSimService {
    * (`status().measure`): check both before offering it.
    */
   measure?(scenario?: Uint8Array, options?: MeasureOptions): Promise<MeasureResult>;
+  /**
+   * A script's tests run beside the game (TrigScript 4): `scenario` is the map as Save builds it
+   * (a whole .scx, whose scenario the page reads) or that scenario as eudplib built it for
+   * StarCraft: Remastered (`.chk` bytes), started by the game with EUD let through;
+   * `module` is the text of an ES module whose `runGameTests(game, payload)` drives the game
+   * through the engine's test handle (scm-sim `src/exact/testGame.ts`) and returns plain data,
+   * which this resolves with. Nothing is drawn and nobody plays. One request runs at a time,
+   * replays included. The module runs with the engine page's rights; it is taken only from the
+   * editor of the same origin. Needs a play page that answers it (`status().tests`): check both
+   * that this function is there and that before offering it. From scm-sim 0.11.0.
+   */
+  test?(scenario: Uint8Array, module: string, payload: unknown, options?: TestRunOptions): Promise<unknown>;
+  /**
+   * A test of several players (TrigScript 4): a copy of the game for each of `options.players`, each seated as that
+   * player, kept in step as a game between people is (scm-sim `src/exact/copies.ts`), each running the module's
+   * `drive(game, payload)` over a handle that also knows the copies (`game.copy`: every player's screen, and where
+   * the copies stopped agreeing). Resolves with each copy's answer, in the order of `players`. A gigabyte of memory a
+   * copy. Needs a play page that answers it (`status().copies`): check both before offering it. From scm-sim 0.11.0.
+   */
+  testCopies?(scenario: Uint8Array, module: string, payload: unknown, options: TestCopiesOptions): Promise<TestCopyResult[]>;
+  /**
+   * One of a script's tests recorded for the debugger (TrigScript 4, A5): as `test`, but the module's
+   * `debugGameTest(game, payload)` runs one test with everything written down, and the run's game stays with the
+   * engine's page for pictures of its frames (`ScmSimDebugSession.picture`). Nothing is drawn for the record, so any
+   * copy that runs `test` runs this; a picture is drawn by a view, under its own rule. Needs a play page that answers
+   * it (`status().debug`).
+   */
+  debug?(scenario: Uint8Array, module: string, payload: unknown, options?: TestRunOptions): Promise<ScmSimDebugSession>;
 }
