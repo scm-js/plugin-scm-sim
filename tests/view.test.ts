@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ViewCamera, ViewFrame, ViewHover, ViewKey, ViewUnits, ViewWheel } from "../contract";
+import type { ViewCamera, ViewFrame, ViewHover, ViewKey, ViewUnits, ViewPointer, ViewWheel } from "../contract";
 import { ViewBridge, type ViewFrameHost } from "../src/view";
 
 const WORDS = { noAnswer: "no answer", noFiles: "no files", replaced: "replaced", closed: "closed" };
@@ -147,6 +147,17 @@ describe("the game view inside an element", () => {
       { deltaX: 0, deltaY: -100, deltaMode: 0, ctrlKey: true, metaKey: false, shiftKey: false, altKey: false, x: 1500, y: 1200 },
       { deltaX: 0, deltaY: 0, deltaMode: 0, ctrlKey: false, metaKey: false, shiftKey: false, altKey: false, x: 0, y: 7 },
     ]);
+  });
+
+  it("passes on the map pixel under the pointer, checked, and null once it is off", () => {
+    const { page, host } = fakeViewer();
+    const view = new ViewBridge("u", element, host, WORDS);
+    const heard: (ViewPointer | null)[] = [];
+    view.onPointer((p) => heard.push(p));
+    page.say({ type: "scmjs.view.pointer", pointer: { x: 1500, y: 1200 } });
+    page.say({ type: "scmjs.view.pointer", pointer: { x: "3", y: 7 } });
+    page.say({ type: "scmjs.view.pointer", pointer: null });
+    expect(heard).toEqual([{ x: 1500, y: 1200 }, null, null]);
   });
 
   it("sends a camera track as a copy, and null to stop following", () => {

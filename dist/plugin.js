@@ -169,6 +169,7 @@ var ViewBridge = class {
   units = /* @__PURE__ */ new Set();
   hovers = /* @__PURE__ */ new Set();
   wheels = /* @__PURE__ */ new Set();
+  pointers = /* @__PURE__ */ new Set();
   closed = false;
   constructor(url, element, host, words, readyMs = 3e4) {
     this.words = words;
@@ -242,6 +243,12 @@ var ViewBridge = class {
           for (const l of this.wheels) l(w);
           return;
         }
+        case "scmjs.view.pointer": {
+          const p = m.pointer;
+          const at = p && typeof p.x === "number" && Number.isFinite(p.x) && typeof p.y === "number" && Number.isFinite(p.y) ? { x: p.x, y: p.y } : null;
+          for (const l of this.pointers) l(at);
+          return;
+        }
         case "scmjs.view.key": {
           const k = { key: String(m.key ?? ""), code: String(m.code ?? ""), shiftKey: m.shiftKey === true, ctrlKey: m.ctrlKey === true, altKey: m.altKey === true, metaKey: m.metaKey === true };
           for (const l of this.keys) l(k);
@@ -313,6 +320,9 @@ var ViewBridge = class {
   onWheel(listener) {
     return this.listen(this.wheels, listener);
   }
+  onPointer(listener) {
+    return this.listen(this.pointers, listener);
+  }
   dispose() {
     if (this.closed) return;
     this.closed = true;
@@ -325,6 +335,7 @@ var ViewBridge = class {
     this.units.clear();
     this.hovers.clear();
     this.wheels.clear();
+    this.pointers.clear();
     this.frame.remove();
   }
 };
