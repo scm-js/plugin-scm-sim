@@ -161,6 +161,103 @@ export interface ScmSimStatus {
   reason: string | null;
   /** The `ReplayTimeline.version` the engine writes, or null when it could not be asked. */
   timeline: number | null;
+  /**
+   * The `PathingResult.version` the engine answers `pathing` with; null when it could not be
+   * asked or its page is from before `pathing` (scm-sim 0.7.0).
+   */
+  pathing: number | null;
+}
+
+/* ── A map's pathing (`ScmSimService.pathing`) ── */
+
+export interface PathingPoint { x: number; y: number }
+/** A start location of the map: its player slot and where it is, in pixels. */
+export interface PathingStart extends PathingPoint { owner: number }
+
+/**
+ * The game's regions for the map, a minitile (8 px) at a time. `grid` holds a region id for
+ * every minitile, row by row, `width × height` of them (the map's size in tiles × 4). The
+ * other arrays are a column per region, by id.
+ */
+export interface PathingRegions {
+  width: number;
+  height: number;
+  grid: Uint16Array;
+  count: number;
+  /** 1 walkable, 0 not. */
+  walkable: Uint8Array;
+  /** Regions of one group are joined by ground; units cannot walk between two groups. */
+  group: Uint16Array;
+  /** The region's centre as the game keeps it, pixels. */
+  x: Int32Array;
+  y: Int32Array;
+  /** Tiles in the region (a tile split between two regions counts for one of them). */
+  tiles: Uint16Array;
+  /** Neighbours of region r: `neighbours[neighbourAt[r]]` up to `neighbourAt[r + 1]`, walkable ones first. */
+  neighbourAt: Uint32Array;
+  neighbours: Uint16Array;
+}
+
+/**
+ * `arrived`: it stopped within reach of where it was sent. `stopped`: it stopped short (the
+ * game found no way all the way there, or gave up looking on a long route). `stuck`: it stood
+ * still for ten seconds with its order still to move. `limit`: still walking when `limit` ran
+ * out. `apart`: not walked, the two places being on ground that does not join. `unmoved`: the
+ * order never took.
+ */
+export type PathingWalkOutcome = "arrived" | "stopped" | "stuck" | "limit" | "apart" | "unmoved";
+
+export interface PathingWalk {
+  /** units.dat id. */
+  unit: number;
+  from: PathingPoint;
+  to: PathingPoint;
+  /** The start locations (their player slots) walked between, when the walk was between two. */
+  fromStart?: number;
+  toStart?: number;
+  outcome: PathingWalkOutcome;
+  /** From the frame the unit took its order to the frame it stopped. 24 frames is a second at Fastest. */
+  frames: number;
+  /** Pixels walked, and how far from `to` it ended. */
+  travelled: number;
+  distance: number;
+  /** Regions it stood in on the way. */
+  regions: number;
+  /** Where it was every `every` frames from the order on, ending where it stopped. */
+  every: number;
+  x: Int16Array;
+  y: Int16Array;
+}
+
+export interface PathingResult {
+  version: number;
+  /** Tiles. */
+  map: { width: number; height: number };
+  starts: PathingStart[];
+  /** Null when `regions: false` was asked. */
+  regions: PathingRegions | null;
+  walks: PathingWalk[];
+}
+
+/** `starting`: the engine and the first game; `walking`: `done` of `total` walks. */
+export interface PathingProgress { stage: "starting" | "walking"; done: number; total: number }
+
+export interface PathingOptions {
+  /** units.dat ids of the ground units to walk; default Probe, Zergling, Dragoon, Siege Tank, Ultralisk. Air units and buildings are left out. */
+  units?: number[];
+  /** Walk both ways between two start locations (default: each pair once, from the lower slot). */
+  directed?: boolean;
+  /** Walk from this point to each of `to` in place of the start locations. */
+  from?: PathingPoint;
+  to?: PathingPoint[];
+  /** Leave the regions out of the answer (default: in). */
+  regions?: boolean;
+  /** Frames a walk may take before it is given up (default 10,000). */
+  limit?: number;
+  /** Keep a walk's position every this many frames (default 8). */
+  every?: number;
+  signal?: AbortSignal;
+  onProgress?: (progress: PathingProgress) => void;
 }
 
 export interface Disposable { dispose(): void }
@@ -398,4 +495,15 @@ export interface ScmSimService {
    * function is there before calling it.
    */
   view?(element: HTMLElement): ScmSimView;
+  /**
+   * The game's own pathing for a map: the regions the game builds when it loads it, and units
+   * walked by the game between its start locations (or from one point to others), with how
+   * long each walk took and the way it went. `scenario` is the bare scenario (`.chk` bytes);
+   * left out, the open map. Nothing is shown and nobody plays. Each start location walked
+   * from is a game of its own, a few seconds each: a 4-player map with the five default units
+   * takes about eight seconds. One request runs at a time, replays included. Rejects with an
+   * `Error` worded for the person. Added in 0.7.0, and needs a play page that answers it
+   * (`status().pathing`): check both before offering it.
+   */
+  pathing?(scenario?: Uint8Array, options?: PathingOptions): Promise<PathingResult>;
 }

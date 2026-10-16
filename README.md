@@ -124,6 +124,42 @@ page says (above); with *Choose on the play page* it is put on the setup screen 
 resolves when it is shown there. Call it from the click that asks for
 it, because a browser only lets a click open a tab. It resolves when the game is on the page.
 
+### `pathing(scenario?, options?)`
+
+Since 0.7.0, and only where the play page answers it: `status().pathing` is a number there
+and null on an older page. Check for both before offering it.
+
+The game's own pathing for a map. Leave `scenario` out for the open map, or pass a bare
+scenario (`.chk` bytes). Nothing is shown and nobody plays: the engine starts the map on a
+copy made for the purpose and only gives units move orders. That copy has a neutral Nexus
+on every start location, the test units, and none of the map's triggers. A StarEdit copy of
+the game is enough for it.
+
+The answer is a `PathingResult`:
+
+| Field | What it holds |
+| --- | --- |
+| `regions` | The regions the game divides the map into when it loads it, which is what it plans ground routes over. `grid` holds a region id for every 8 × 8 px cell of the map. Per region: whether it is `walkable`, its `group` (ground of one group is joined; different groups are not), its centre, its size in tiles and its neighbours. Typed arrays. |
+| `walks` | One per unit and pair of places: the unit type, `from` and `to` (and the start locations' slots), the `outcome`, the `frames` it took (24 a second at Fastest), the pixels it `travelled`, how far from `to` it ended, how many regions it crossed, and its route (`x`, `y` every `every` frames). |
+| `starts`, `map` | The map's start locations and its size in tiles. |
+
+`outcome` is `arrived`, `stopped` (it stopped short: the game found no way all the way
+there, or gave up on a long route), `stuck` (it stood still for ten seconds still meaning to
+move), `limit` (still walking when `limit` ran out), `apart` (not walked: the two places
+are on ground that does not join) or `unmoved`.
+
+By default it walks a Probe, Zergling, Dragoon, Siege Tank and Ultralisk from each start
+location to every later one. Each start location walked from is a game of its own, a few
+seconds each: a 4-player map takes about eight seconds, an 8-player map about forty.
+Options:
+
+- `units`: other ground units (units.dat ids).
+- `directed`: walk both ways between two start locations.
+- `from` and `to`: walk between your own points instead of the start locations.
+- `regions: false`: leave the regions out.
+- `limit` and `every`: the frames a walk may take, and how often its position is kept.
+- `signal` and `onProgress`: as for `analyse`.
+
 ### `view(element)`
 
 Since 0.5.0. The game itself, drawn inside an element of yours and filling it: a replay
