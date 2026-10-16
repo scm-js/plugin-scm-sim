@@ -12,12 +12,15 @@
  *                                                                   whose `ready` says `pathing`)
  *   ← `{ type: "scmjs.sim.progress", id, stage, done, total }`      `stage` "starting" or "walking"
  *   ← `{ type: "scmjs.sim.pathed", id, pathing }`
+ *   → `{ type: "scmjs.sim.measure", id, chk, options? }`            a map's measures (from scm-sim 0.8.0, whose
+ *                                                                   `ready` says `measure`); progress `measuring`
+ *   ← `{ type: "scmjs.sim.measured", id, measure }`
  *
  * The frame is made on the first call and kept; `status()` loads it afresh, since the
  * page looks for the game's files once, when it loads. Nothing here touches the DOM
  * directly: the frame is behind `FrameHost`, so the conversation is tested without one.
  */
-import type { AnalyseOptions, PathingOptions, PathingProgress, PathingResult, ReplayTimeline, ScmSimStatus } from "../contract";
+import type { AnalyseOptions, MeasureOptions, MeasureProgress, MeasureResult, PathingOptions, PathingProgress, PathingResult, ReplayTimeline, ScmSimStatus } from "../contract";
 
 export interface Frame {
   post(message: object): void;
@@ -33,9 +36,11 @@ export interface BridgeWords {
   closed: string;
   /** The page is from before a map's pathing. */
   noPathing: string;
+  /** The page is from before a map's measures. */
+  noMeasure: string;
 }
 
-interface Ready { version: number | null; pathing: number | null; files: ScmSimStatus["files"]; why: string | null }
+interface Ready { version: number | null; pathing: number | null; measure: number | null; files: ScmSimStatus["files"]; why: string | null }
 /** What the page said of a request on its way: its progress message, as it came. */
 type Heard = { stage?: unknown; frame?: unknown; frames?: unknown; done?: unknown; total?: unknown };
 interface Pending { resolve(v: unknown): void; reject(e: Error): void; progress?(m: Heard): void; done(): void }
@@ -68,12 +73,12 @@ export class Bridge {
     this.ready = new Promise<Ready>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error(this.words.noAnswer)), this.readyMs);
       this.frame = this.host(this.url, (data) => {
-        const m = data as Heard & { type?: unknown; id?: unknown; version?: unknown; pathing?: unknown; files?: unknown; why?: unknown; timeline?: unknown; message?: unknown } | null;
+        const m = data as Heard & { type?: unknown; id?: unknown; version?: unknown; pathing?: unknown; measure?: unknown; files?: unknown; why?: unknown; timeline?: unknown; message?: unknown } | null;
         if (!m || typeof m.type !== "string") return;
         if (m.type === "scmjs.sim.ready") {
           clearTimeout(timer);
           const files = m.files === "archives" || m.files === "copy" || m.files === "server" ? m.files : null;
-          resolve({ version: typeof m.version === "number" ? m.version : null, pathing: typeof m.pathing === "number" ? m.pathing : null, files, why: typeof m.why === "string" ? m.why : null });
+          resolve({ version: typeof m.version === "number" ? m.version : null, pathing: typeof m.pathing === "number" ? m.pathing : null, measure: typeof m.measure === "number" ? m.measure : null, files, why: typeof m.why === "string" ? m.why : null });
           return;
         }
         const p = typeof m.id === "number" ? this.pending.get(m.id) : undefined;
@@ -81,6 +86,7 @@ export class Bridge {
         if (m.type === "scmjs.sim.progress") p.progress?.(m);
         else if (m.type === "scmjs.sim.result") { p.done(); p.resolve(m.timeline); }
         else if (m.type === "scmjs.sim.pathed") { p.done(); p.resolve((m as { pathing?: unknown }).pathing); }
+        else if (m.type === "scmjs.sim.measured") { p.done(); p.resolve((m as { measure?: unknown }).measure); }
         else if (m.type === "scmjs.sim.error") { p.done(); p.reject(new Error(String(m.message ?? ""))); }
       });
     });
@@ -97,9 +103,9 @@ export class Bridge {
     if (this.pending.size === 0 && !this.opening) this.close();
     try {
       const r = await this.open();
-      return { available: r.files !== null, files: r.files, reason: r.files ? null : r.why ?? this.words.noFiles, timeline: r.version, pathing: r.pathing };
+      return { available: r.files !== null, files: r.files, reason: r.files ? null : r.why ?? this.words.noFiles, timeline: r.version, pathing: r.pathing, measure: r.measure };
     } catch (err) {
-      return { available: false, files: null, reason: err instanceof Error ? err.message : String(err), timeline: null, pathing: null };
+      return { available: false, files: null, reason: err instanceof Error ? err.message : String(err), timeline: null, pathing: null, measure: null };
     }
   }
 
@@ -114,6 +120,13 @@ export class Bridge {
     const { signal, onProgress, ...asked } = options;
     const progress = onProgress && ((m: Heard) => onProgress({ stage: m.stage === "walking" ? "walking" : "starting", done: Number(m.done) || 0, total: Number(m.total) || 0 } satisfies PathingProgress));
     return this.ask<PathingResult>(signal, progress, (id) => ({ type: "scmjs.sim.pathing", id, chk: scenario.slice(), options: asked }), (r) => (r.pathing === null ? this.words.noPathing : null));
+  }
+
+  /** A map's measures: `scenario` is the bare scenario (.chk bytes). */
+  async measure(scenario: Uint8Array, options: MeasureOptions = {}): Promise<MeasureResult> {
+    const { signal, onProgress, ...asked } = options;
+    const progress = onProgress && ((m: Heard) => onProgress({ stage: m.stage === "measuring" ? "measuring" : "starting", done: Number(m.done) || 0, total: Number(m.total) || 0 } satisfies MeasureProgress));
+    return this.ask<MeasureResult>(signal, progress, (id) => ({ type: "scmjs.sim.measure", id, chk: scenario.slice(), options: asked }), (r) => (r.measure === null ? this.words.noMeasure : null));
   }
 
   /** One request to the page: `message` with its id, answered by a result, an error, or a cancel when `signal` aborts. */
