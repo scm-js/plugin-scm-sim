@@ -15,12 +15,15 @@
  *   → `{ type: "scmjs.sim.measure", id, chk, options? }`            a map's measures (from scm-sim 0.8.0, whose
  *                                                                   `ready` says `measure`); progress `measuring`
  *   ← `{ type: "scmjs.sim.measured", id, measure }`
+ *   → `{ type: "scmjs.sim.test", id, chk, module, payload }`        a script's tests beside the game (a page whose
+ *                                                                   `ready` says `tests`)
+ *   ← `{ type: "scmjs.sim.tested", id, report }`
  *
  * The frame is made on the first call and kept; `status()` loads it afresh, since the
  * page looks for the game's files once, when it loads. Nothing here touches the DOM
  * directly: the frame is behind `FrameHost`, so the conversation is tested without one.
  */
-import type { AnalyseOptions, MeasureOptions, MeasureProgress, MeasureResult, PathingOptions, PathingProgress, PathingResult, ReplayTimeline, ScmSimStatus } from "../contract";
+import type { AnalyseOptions, MeasureOptions, MeasureProgress, MeasureResult, PathingOptions, PathingProgress, PathingResult, ReplayTimeline, ScmSimStatus, TestRunOptions } from "../contract";
 
 export interface Frame {
   post(message: object): void;
@@ -38,9 +41,11 @@ export interface BridgeWords {
   noPathing: string;
   /** The page is from before a map's measures. */
   noMeasure: string;
+  /** The page is from before a script's tests. */
+  noTests: string;
 }
 
-interface Ready { version: number | null; pathing: number | null; measure: number | null; files: ScmSimStatus["files"]; why: string | null }
+interface Ready { version: number | null; pathing: number | null; measure: number | null; tests: number | null; files: ScmSimStatus["files"]; why: string | null }
 /** What the page said of a request on its way: its progress message, as it came. */
 type Heard = { stage?: unknown; frame?: unknown; frames?: unknown; done?: unknown; total?: unknown };
 interface Pending { resolve(v: unknown): void; reject(e: Error): void; progress?(m: Heard): void; done(): void }
@@ -73,12 +78,12 @@ export class Bridge {
     this.ready = new Promise<Ready>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error(this.words.noAnswer)), this.readyMs);
       this.frame = this.host(this.url, (data) => {
-        const m = data as Heard & { type?: unknown; id?: unknown; version?: unknown; pathing?: unknown; measure?: unknown; files?: unknown; why?: unknown; timeline?: unknown; message?: unknown } | null;
+        const m = data as Heard & { type?: unknown; id?: unknown; version?: unknown; pathing?: unknown; measure?: unknown; tests?: unknown; files?: unknown; why?: unknown; timeline?: unknown; message?: unknown } | null;
         if (!m || typeof m.type !== "string") return;
         if (m.type === "scmjs.sim.ready") {
           clearTimeout(timer);
           const files = m.files === "archives" || m.files === "copy" || m.files === "server" ? m.files : null;
-          resolve({ version: typeof m.version === "number" ? m.version : null, pathing: typeof m.pathing === "number" ? m.pathing : null, measure: typeof m.measure === "number" ? m.measure : null, files, why: typeof m.why === "string" ? m.why : null });
+          resolve({ version: typeof m.version === "number" ? m.version : null, pathing: typeof m.pathing === "number" ? m.pathing : null, measure: typeof m.measure === "number" ? m.measure : null, tests: typeof m.tests === "number" ? m.tests : null, files, why: typeof m.why === "string" ? m.why : null });
           return;
         }
         const p = typeof m.id === "number" ? this.pending.get(m.id) : undefined;
@@ -87,6 +92,7 @@ export class Bridge {
         else if (m.type === "scmjs.sim.result") { p.done(); p.resolve(m.timeline); }
         else if (m.type === "scmjs.sim.pathed") { p.done(); p.resolve((m as { pathing?: unknown }).pathing); }
         else if (m.type === "scmjs.sim.measured") { p.done(); p.resolve((m as { measure?: unknown }).measure); }
+        else if (m.type === "scmjs.sim.tested") { p.done(); p.resolve((m as { report?: unknown }).report); }
         else if (m.type === "scmjs.sim.error") { p.done(); p.reject(new Error(String(m.message ?? ""))); }
       });
     });
@@ -103,9 +109,9 @@ export class Bridge {
     if (this.pending.size === 0 && !this.opening) this.close();
     try {
       const r = await this.open();
-      return { available: r.files !== null, files: r.files, reason: r.files ? null : r.why ?? this.words.noFiles, timeline: r.version, pathing: r.pathing, measure: r.measure };
+      return { available: r.files !== null, files: r.files, reason: r.files ? null : r.why ?? this.words.noFiles, timeline: r.version, pathing: r.pathing, measure: r.measure, tests: r.tests };
     } catch (err) {
-      return { available: false, files: null, reason: err instanceof Error ? err.message : String(err), timeline: null, pathing: null, measure: null };
+      return { available: false, files: null, reason: err instanceof Error ? err.message : String(err), timeline: null, pathing: null, measure: null, tests: null };
     }
   }
 
@@ -127,6 +133,12 @@ export class Bridge {
     const { signal, onProgress, ...asked } = options;
     const progress = onProgress && ((m: Heard) => onProgress({ stage: m.stage === "measuring" ? "measuring" : "starting", done: Number(m.done) || 0, total: Number(m.total) || 0 } satisfies MeasureProgress));
     return this.ask<MeasureResult>(signal, progress, (id) => ({ type: "scmjs.sim.measure", id, chk: scenario.slice(), options: asked }), (r) => (r.measure === null ? this.words.noMeasure : null));
+  }
+
+  /** A script's tests beside the game: the scenario as eudplib built it, the module's text and its payload, as they are. */
+  async test(scenario: Uint8Array, module: string, payload: unknown, options: TestRunOptions = {}): Promise<unknown> {
+    const progress = options.onProgress && (() => options.onProgress!({ stage: "starting" }));
+    return this.ask<unknown>(options.signal, progress, (id) => ({ type: "scmjs.sim.test", id, chk: scenario.slice(), module, payload }), (r) => (r.tests === null ? this.words.noTests : null));
   }
 
   /** One request to the page: `message` with its id, answered by a result, an error, or a cancel when `signal` aborts. */

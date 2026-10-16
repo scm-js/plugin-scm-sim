@@ -171,6 +171,11 @@ export interface ScmSimStatus {
    * asked or its page is from before `measure` (scm-sim 0.8.0).
    */
   measure: number | null;
+  /**
+   * The version of the test request the engine's page answers (`test`); null when it could not be asked or its page
+   * is from before it (scm-sim with TrigScript 4's tests).
+   */
+  tests?: number | null;
 }
 
 /* ── A map's measures (`ScmSimService.measure`) ── */
@@ -255,6 +260,12 @@ export interface MeasureOptions {
   limit?: number;
   signal?: AbortSignal;
   onProgress?: (progress: MeasureProgress) => void;
+}
+
+/** What `ScmSimService.test` may be told beside the map and the module. */
+export interface TestRunOptions {
+  signal?: AbortSignal;
+  onProgress?: (p: { stage: "starting" }) => void;
 }
 
 /* ── A map's pathing (`ScmSimService.pathing`) ── */
@@ -625,4 +636,16 @@ export interface ScmSimService {
    * (`status().measure`): check both before offering it.
    */
   measure?(scenario?: Uint8Array, options?: MeasureOptions): Promise<MeasureResult>;
+  /**
+   * A script's tests run beside the game (TrigScript 4): `scenario` is the map as Save builds it
+   * (a whole .scx, whose scenario the page reads) or that scenario as eudplib built it for
+   * StarCraft: Remastered (`.chk` bytes), started by the game with EUD let through;
+   * `module` is the text of an ES module whose `runGameTests(game, payload)` drives the game
+   * through the engine's test handle (scm-sim `src/exact/testGame.ts`) and returns plain data,
+   * which this resolves with. Nothing is drawn and nobody plays. One request runs at a time,
+   * replays included. The module runs with the engine page's rights; it is taken only from the
+   * editor of the same origin. Needs a play page that answers it (`status().tests`): check both
+   * that this function is there and that before offering it.
+   */
+  test?(scenario: Uint8Array, module: string, payload: unknown, options?: TestRunOptions): Promise<unknown>;
 }

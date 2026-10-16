@@ -36,6 +36,7 @@ export function activate(api: PluginApi): () => void {
     closed: t("The engine was closed before it finished."),
     noPathing: t("The engine's page cannot work out a map's pathing yet. Reload the editor and try again."),
     noMeasure: t("The engine's page cannot measure a map yet. Reload the editor and try again."),
+    noTests: t("The engine's page cannot run a script's tests in the game yet. Reload the editor and try again."),
   });
   const tab = address && new PlayTab(address, {
     blocked: t("The browser did not let the play page open. Allow pop-ups for this site and try again."),
@@ -63,7 +64,7 @@ export function activate(api: PluginApi): () => void {
   const views = new Set<ViewBridge>();
   const service: ScmSimService = {
     present: address !== null,
-    status: async () => bridge ? bridge.status() : { available: false, files: null, reason: absent().message, timeline: null, pathing: null, measure: null },
+    status: async () => bridge ? bridge.status() : { available: false, files: null, reason: absent().message, timeline: null, pathing: null, measure: null, tests: null },
     analyse: async (replay, options) => { if (!bridge) throw absent(); return bridge.analyse(replay, options); },
     play: async (map) => { await test(map); },
     pathing: async (scenario, options) => {
@@ -74,6 +75,7 @@ export function activate(api: PluginApi): () => void {
       if (!bridge) throw absent();
       return bridge.measure(scenario ?? await openScenario(), options);
     },
+    test: async (scenario, module, payload, options) => { if (!bridge) throw absent(); return bridge.test(scenario, module, payload, options); },
     view: (element) => {
       if (!address) throw absent();
       const view = new ViewBridge(address.view, element, domViewFrames(address.origin), {
