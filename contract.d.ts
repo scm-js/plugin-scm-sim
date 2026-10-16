@@ -641,6 +641,18 @@ export interface ScmSimView {
    * editor's hotkeys and every plugin's act on it as if it had been pressed there.
    */
   onKey(listener: (key: ViewKey) => void): Disposable;
+  /**
+   * A debugged run's built map (TrigScript 4, A5; the whole .scx `ScmSimService.debug` was given): started as the
+   * engine's page started it for the record, so that the run's pictures (`show`) can be drawn here. The view then
+   * never plays. Rejects on a play page from before it, and where the person's copy of the game may only watch (a
+   * picture of a map's run is the map played).
+   */
+  debug?(map: Uint8Array): Promise<{ map: { width: number; height: number } }>;
+  /** Draws a picture of the debugged run as it stands (`ScmSimDebugSession.picture`); `onShown` hears its frame once up. */
+  show?(picture: ScmSimPicture): void;
+  onShown?(listener: (frame: number) => void): Disposable;
+  /** What went wrong with no request waiting on it: a picture that could not be drawn. */
+  onError?(listener: (message: string) => void): Disposable;
   /** Takes the frame away and the engine with it. */
   dispose(): void;
 }

@@ -88,6 +88,7 @@ export function activate(api: PluginApi): () => void {
         noFiles: t("This browser has no copy of StarCraft to play from. Give the site your game on the Game Data page."),
         replaced: t("Another replay was loaded in its place."),
         closed: t("The game view was closed."),
+        noDebug: t("The game view cannot draw a debugged run yet. Reload the editor and try again."),
       });
       // The keys the view does not use are the editor's: pressed again on its window.
       view.onKey(pressOnWindow);
