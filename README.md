@@ -241,7 +241,9 @@ not use itself (all but the arrows, which scroll) comes to `onKey` and is presse
 the editor's window, so the editor's hotkeys and every plugin's still work. Since 0.9.0 the
 wheel over the view comes to `onWheel`, with the map pixel under the pointer: the game does
 nothing with it, and keeps Ctrl and the wheel from zooming the browser's tab, so hand it to
-the editor's map view (`view.wheel(w)`) and the game zooms the way the map does. Inside the
+the editor's map view (`view.wheel(w)`) and the game zooms the way the map does. Since 0.10.0
+`onPointer` says the map pixel under the pointer as it moves over the map, and null once it
+leaves, for the editor's status bar (`view.setPointer(p)`). Inside the
 editor, `api.ui.mapView` is the place for the element: it is never moved, so the game is
 not started again when the person switches to the map and back.
 
