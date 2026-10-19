@@ -27,6 +27,7 @@ export const KO: Record<string, string> = {
   "The engine's page cannot work out a map's pathing yet. Reload the editor and try again.": "엔진 페이지가 아직 맵의 경로를 계산할 수 없습니다. 편집기를 새로 고친 뒤 다시 시도하세요.",
   "There is no map open.": "열린 맵이 없습니다.",
   "The engine's page cannot measure a map yet. Reload the editor and try again.": "엔진 페이지가 아직 맵을 측정할 수 없습니다. 편집기를 새로 고친 뒤 다시 시도하세요.",
+  "The engine's page cannot play a fight again yet. Reload the editor and try again.": "엔진 페이지가 아직 전투를 다시 재생할 수 없습니다. 편집기를 새로 고친 뒤 다시 시도하세요.",
   "Another replay was loaded in its place.": "그 자리에 다른 리플레이를 불러왔습니다.",
   "The game view was closed.": "게임 화면이 닫혔습니다.",
   "The engine's page did not answer.": "엔진 페이지가 응답하지 않았습니다.",

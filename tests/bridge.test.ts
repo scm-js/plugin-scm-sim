@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { MeasureResult, PathingResult, ReplayTimeline } from "../contract";
+import type { FightsResult, MeasureResult, PathingResult, ReplayTimeline } from "../contract";
 import { Bridge, type FrameHost } from "../src/bridge";
 
-const WORDS = { noAnswer: "no answer", noFiles: "no files", closed: "closed", noPathing: "no pathing", noMeasure: "no measure" };
+const WORDS = { noAnswer: "no answer", noFiles: "no files", closed: "closed", noPathing: "no pathing", noMeasure: "no measure", noFights: "no fights" };
 const timeline = (frames: number) => ({ version: 1, frames } as ReplayTimeline);
 
 /** A stand-in for the engine's page: what it was sent, and a way to speak as it. */
@@ -22,9 +22,9 @@ const tick = () => new Promise<void>((r) => setTimeout(r, 0));
 describe("the conversation with the engine's page", () => {
   it("says whether a game can be run, from what the page says of the game's files", async () => {
     const yes = fakePage();
-    expect(await new Bridge("u", yes.host, WORDS).status()).toEqual({ available: true, files: "copy", reason: null, timeline: 1, pathing: null, measure: null });
+    expect(await new Bridge("u", yes.host, WORDS).status()).toEqual({ available: true, files: "copy", reason: null, timeline: 1, pathing: null, measure: null, fights: null });
     const no = fakePage({ type: "scmjs.sim.ready", version: 1, files: null, why: "install it" });
-    expect(await new Bridge("u", no.host, WORDS).status()).toEqual({ available: false, files: null, reason: "install it", timeline: 1, pathing: null, measure: null });
+    expect(await new Bridge("u", no.host, WORDS).status()).toEqual({ available: false, files: null, reason: "install it", timeline: 1, pathing: null, measure: null, fights: null });
     const newer = fakePage({ type: "scmjs.sim.ready", version: 4, pathing: 1, files: "copy" });
     expect(await new Bridge("u", newer.host, WORDS).status()).toMatchObject({ available: true, timeline: 4, pathing: 1 });
   });
@@ -148,6 +148,29 @@ describe("the conversation with the engine's page", () => {
   it("refuses measures on a page from before them, asking nothing", async () => {
     const { page, host } = fakePage({ type: "scmjs.sim.ready", version: 4, pathing: 1, files: "copy" });
     await expect(new Bridge("u", host, WORDS).measure(new Uint8Array(1), { starts: true })).rejects.toThrow("no measure");
+    expect(page.sent).toEqual([]);
+  });
+
+  it("hands a replay over for its fights and resolves with the page's answer, passing progress on", async () => {
+    const { page, host } = fakePage({ type: "scmjs.sim.ready", version: 4, pathing: 1, measure: 1, fights: 1, files: "copy" });
+    const bridge = new Bridge("u", host, WORDS);
+    expect((await bridge.status()).fights).toBe(1);
+    const seen: string[] = [];
+    const fights = [{ from: 100, to: 200, x0: 1, y0: 2, x1: 30, y1: 40, players: [0, 1] }];
+    const got = bridge.fights(new Uint8Array([7]), fights, { tail: 60, onProgress: (p) => seen.push(`${p.stage} ${p.frame}/${p.frames}`) });
+    await tick();
+    const asked = page.sent[0];
+    expect(asked).toMatchObject({ type: "scmjs.sim.fights", fights, options: { tail: 60 } });
+    expect(asked.options).not.toHaveProperty("onProgress");
+    page.say({ type: "scmjs.sim.progress", id: asked.id, stage: "playing", frame: 50, frames: 100 });
+    page.say({ type: "scmjs.sim.fought", id: asked.id, result: { version: 1, fights: [null] } as unknown as FightsResult });
+    expect((await got).fights).toEqual([null]);
+    expect(seen).toEqual(["playing 50/100"]);
+  });
+
+  it("refuses fights on a page from before them, asking nothing", async () => {
+    const { page, host } = fakePage({ type: "scmjs.sim.ready", version: 4, pathing: 1, measure: 1, files: "copy" });
+    await expect(new Bridge("u", host, WORDS).fights(new Uint8Array(1), [])).rejects.toThrow("no fights");
     expect(page.sent).toEqual([]);
   });
 

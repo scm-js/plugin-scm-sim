@@ -97,6 +97,7 @@ The answer is a `ReplayTimeline`:
 | `research` | Upgrades and technologies as they finish, per player. |
 | `samples` | Every 48 frames by default (two seconds at Fastest): each player's minerals, gas, supply used and available, finished workers, army size, army cost and finished buildings. |
 | `positions` | At the same frames, where every unit stood. Buildings and units inside a transport or bunker are left out. Typed arrays; `start[i]` to `start[i + 1]` are the rows of sample `i`. |
+| `sight` | When each player could see each unit of the other players, as the game decides it. A unit under a player's fog is not seen by them, and a cloaked or burrowed unit is seen only by players who detect it. Each row is one stretch: a unit, the player who saw it, the frames from and to, and `by`, the player's unit that saw it first. The game does not record which unit sees what; `by` is the player's unit nearest to having it in sight (or 0xFFFFFFFF), the likeliest seer. Typed arrays. From timeline version 5 (scm-sim 0.11.0); absent before that. |
 | `players`, `map`, `frames`, `total`, `ended` | The players as the replay names them, the map's size in tiles, how far the game was played and how it stopped. |
 | `check` | Whether the game the engine played stayed the game in the replay. `parted` is null when it did, else the frame from which the timeline is no longer what happened. See below. |
 
@@ -187,6 +188,31 @@ a StarEdit copy of the game is enough.
   build an Assimilator.
 
 A 4-player map's start locations plus two groups take about ten seconds.
+
+### `fights(replay, fights, options?)`
+
+Since 0.11.0, and only where the play page answers it: `status().fights` is a number
+there and null on an older page. Check for both before offering it.
+
+A replay's fights played again by the game, from just before each. Give the replay's
+whole file and each fight's frames (`from`, the first loss, to `to`, the last) and the box
+around what fell, in pixels, as your own analysis finds them. Each fight is played in
+two ways, and both are measured the same way, so they compare:
+
+- `played`: the replay's own commands, as recorded.
+- `attackMove`: the units that can attack and the Medics attack-move to the middle of the
+  box, and nobody gives any other command anywhere until the fight ends. Production that was
+  already queued finishes and walks to its rally point, and nothing new is started.
+
+The game itself decides which units took part: every unit of the sides that came into the box
+at any time as the fight was played, wherever it stood at the start. For each side you get
+those units and their cost, the ones dead at the end and their cost, and the cost of
+what the side has inside the box at the end, including units that arrived later. Ask for
+`versions: ["played", "attackMove", "handsOff"]` to add a version with no commands at all.
+
+The replay is played once from its start and stops at each fight, so it takes about as long
+as `analyse` does to reach the last fight, plus a second or two for each fight. Two fights
+late in a 22-minute game take about eleven seconds.
 
 ### `view(element)`
 
