@@ -42,7 +42,7 @@ var Bridge = class {
         if (m.type === "scmjs.sim.ready") {
           clearTimeout(timer);
           const files2 = m.files === "archives" || m.files === "copy" || m.files === "server" ? m.files : null;
-          resolve({ version: typeof m.version === "number" ? m.version : null, pathing: typeof m.pathing === "number" ? m.pathing : null, measure: typeof m.measure === "number" ? m.measure : null, files: files2, why: typeof m.why === "string" ? m.why : null });
+          resolve({ version: typeof m.version === "number" ? m.version : null, pathing: typeof m.pathing === "number" ? m.pathing : null, measure: typeof m.measure === "number" ? m.measure : null, fights: typeof m.fights === "number" ? m.fights : null, files: files2, why: typeof m.why === "string" ? m.why : null });
           return;
         }
         const p = typeof m.id === "number" ? this.pending.get(m.id) : void 0;
@@ -57,6 +57,9 @@ var Bridge = class {
         } else if (m.type === "scmjs.sim.measured") {
           p.done();
           p.resolve(m.measure);
+        } else if (m.type === "scmjs.sim.fought") {
+          p.done();
+          p.resolve(m.result);
         } else if (m.type === "scmjs.sim.error") {
           p.done();
           p.reject(new Error(String(m.message ?? "")));
@@ -78,9 +81,9 @@ var Bridge = class {
     if (this.pending.size === 0 && !this.opening) this.close();
     try {
       const r = await this.open();
-      return { available: r.files !== null, files: r.files, reason: r.files ? null : r.why ?? this.words.noFiles, timeline: r.version, pathing: r.pathing, measure: r.measure };
+      return { available: r.files !== null, files: r.files, reason: r.files ? null : r.why ?? this.words.noFiles, timeline: r.version, pathing: r.pathing, measure: r.measure, fights: r.fights };
     } catch (err) {
-      return { available: false, files: null, reason: err instanceof Error ? err.message : String(err), timeline: null, pathing: null, measure: null };
+      return { available: false, files: null, reason: err instanceof Error ? err.message : String(err), timeline: null, pathing: null, measure: null, fights: null };
     }
   }
   async analyse(replay, options = {}) {
@@ -98,6 +101,12 @@ var Bridge = class {
     const { signal, onProgress, ...asked } = options;
     const progress = onProgress && ((m) => onProgress({ stage: m.stage === "measuring" ? "measuring" : "starting", done: Number(m.done) || 0, total: Number(m.total) || 0 }));
     return this.ask(signal, progress, (id) => ({ type: "scmjs.sim.measure", id, chk: scenario.slice(), options: asked }), (r) => r.measure === null ? this.words.noMeasure : null);
+  }
+  /** A replay's fights played again: `replay` is a whole .rep file. */
+  async fights(replay, fights, options = {}) {
+    const { signal, onProgress, ...asked } = options;
+    const progress = onProgress && ((m) => onProgress({ stage: m.stage === "playing" ? "playing" : "starting", frame: Number(m.frame) || 0, frames: Number(m.frames) || 0 }));
+    return this.ask(signal, progress, (id) => ({ type: "scmjs.sim.fights", id, replay: replay.slice(), fights, options: asked }), (r) => r.fights === null ? this.words.noFights : null);
   }
   /** One request to the page: `message` with its id, answered by a result, an error, or a cancel when `signal` aborts. */
   async ask(signal, progress, message, refuse) {
@@ -605,6 +614,7 @@ var KO = {
   "The engine's page cannot work out a map's pathing yet. Reload the editor and try again.": "\uC5D4\uC9C4 \uD398\uC774\uC9C0\uAC00 \uC544\uC9C1 \uB9F5\uC758 \uACBD\uB85C\uB97C \uACC4\uC0B0\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4. \uD3B8\uC9D1\uAE30\uB97C \uC0C8\uB85C \uACE0\uCE5C \uB4A4 \uB2E4\uC2DC \uC2DC\uB3C4\uD558\uC138\uC694.",
   "There is no map open.": "\uC5F4\uB9B0 \uB9F5\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.",
   "The engine's page cannot measure a map yet. Reload the editor and try again.": "\uC5D4\uC9C4 \uD398\uC774\uC9C0\uAC00 \uC544\uC9C1 \uB9F5\uC744 \uCE21\uC815\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4. \uD3B8\uC9D1\uAE30\uB97C \uC0C8\uB85C \uACE0\uCE5C \uB4A4 \uB2E4\uC2DC \uC2DC\uB3C4\uD558\uC138\uC694.",
+  "The engine's page cannot play a fight again yet. Reload the editor and try again.": "\uC5D4\uC9C4 \uD398\uC774\uC9C0\uAC00 \uC544\uC9C1 \uC804\uD22C\uB97C \uB2E4\uC2DC \uC7AC\uC0DD\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4. \uD3B8\uC9D1\uAE30\uB97C \uC0C8\uB85C \uACE0\uCE5C \uB4A4 \uB2E4\uC2DC \uC2DC\uB3C4\uD558\uC138\uC694.",
   "Another replay was loaded in its place.": "\uADF8 \uC790\uB9AC\uC5D0 \uB2E4\uB978 \uB9AC\uD50C\uB808\uC774\uB97C \uBD88\uB7EC\uC654\uC2B5\uB2C8\uB2E4.",
   "The game view was closed.": "\uAC8C\uC784 \uD654\uBA74\uC774 \uB2EB\uD614\uC2B5\uB2C8\uB2E4.",
   "The engine's page did not answer.": "\uC5D4\uC9C4 \uD398\uC774\uC9C0\uAC00 \uC751\uB2F5\uD558\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4.",
@@ -635,7 +645,8 @@ function activate(api) {
     noFiles: t("This browser has no copy of StarCraft to play from. Give the site your game on the Game Data page."),
     closed: t("The engine was closed before it finished."),
     noPathing: t("The engine's page cannot work out a map's pathing yet. Reload the editor and try again."),
-    noMeasure: t("The engine's page cannot measure a map yet. Reload the editor and try again.")
+    noMeasure: t("The engine's page cannot measure a map yet. Reload the editor and try again."),
+    noFights: t("The engine's page cannot play a fight again yet. Reload the editor and try again.")
   });
   const tab = address && new PlayTab(address, {
     blocked: t("The browser did not let the play page open. Allow pop-ups for this site and try again."),
@@ -659,7 +670,7 @@ function activate(api) {
   const views = /* @__PURE__ */ new Set();
   const service = {
     present: address !== null,
-    status: async () => bridge ? bridge.status() : { available: false, files: null, reason: absent().message, timeline: null, pathing: null, measure: null },
+    status: async () => bridge ? bridge.status() : { available: false, files: null, reason: absent().message, timeline: null, pathing: null, measure: null, fights: null },
     analyse: async (replay, options) => {
       if (!bridge) throw absent();
       return bridge.analyse(replay, options);
@@ -674,6 +685,10 @@ function activate(api) {
     measure: async (scenario, options) => {
       if (!bridge) throw absent();
       return bridge.measure(scenario ?? await openScenario(), options);
+    },
+    fights: async (replay, fights, options) => {
+      if (!bridge) throw absent();
+      return bridge.fights(replay, fights, options);
     },
     view: (element) => {
       if (!address) throw absent();
