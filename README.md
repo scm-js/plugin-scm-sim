@@ -97,6 +97,7 @@ The answer is a `ReplayTimeline`:
 | `research` | Upgrades and technologies as they finish, per player. |
 | `samples` | Every 48 frames by default (two seconds at Fastest): each player's minerals, gas, supply used and available, finished workers, army size, army cost and finished buildings. |
 | `positions` | At the same frames, where every unit stood. Buildings and units inside a transport or bunker are left out. Typed arrays; `start[i]` to `start[i + 1]` are the rows of sample `i`. |
+| `sight` | When each player could see each unit of the other players, as the game decides it. A unit under a player's fog is not seen by them, and a cloaked or burrowed unit is seen only by players who detect it. Each row is one stretch: a unit, the player who saw it, and the frames from and to. Typed arrays. From timeline version 5 (scm-sim 0.11.0); absent before that. |
 | `players`, `map`, `frames`, `total`, `ended` | The players as the replay names them, the map's size in tiles, how far the game was played and how it stopped. |
 | `check` | Whether the game the engine played stayed the game in the replay. `parted` is null when it did, else the frame from which the timeline is no longer what happened. See below. |
 
