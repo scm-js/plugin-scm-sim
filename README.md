@@ -188,6 +188,31 @@ a StarEdit copy of the game is enough.
 
 A 4-player map's start locations plus two groups take about ten seconds.
 
+### `fights(replay, fights, options?)`
+
+Since 0.11.0, and only where the play page answers it: `status().fights` is a number
+there and null on an older page. Check for both before offering it.
+
+A replay's fights played again by the game, from just before each. Give the replay's
+whole file and each fight's frames (`from`, the first loss, to `to`, the last) and the box
+around what fell, in pixels, as your own analysis finds them. Each fight is played in
+two ways, and both are measured the same way, so they compare:
+
+- `played`: the replay's own commands, as recorded.
+- `attackMove`: the units that can attack and the Medics attack-move to the middle of the
+  box, and nobody gives any other command anywhere until the fight ends. Production that was
+  already queued finishes and walks to its rally point, and nothing new is started.
+
+The game itself decides which units took part: every unit of the sides that came into the box
+at any time as the fight was played, wherever it stood at the start. For each side you get
+those units and their cost, the ones dead at the end and their cost, and the cost of
+what the side has inside the box at the end, including units that arrived later. Ask for
+`versions: ["played", "attackMove", "handsOff"]` to add a version with no commands at all.
+
+The replay is played once from its start and stops at each fight, so it takes about as long
+as `analyse` does to reach the last fight, plus a second or two for each fight. Two fights
+late in a 22-minute game take about eleven seconds.
+
 ### `view(element)`
 
 Since 0.5.0. The game itself, drawn inside an element of yours and filling it: a replay
