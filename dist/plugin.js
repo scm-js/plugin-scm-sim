@@ -428,30 +428,13 @@ function playHow(s) {
 }
 
 // src/page.ts
-function registerPreferencesPage(api, service, settings) {
+function testSettingsForm(api, settings) {
   const t = api.i18n.t;
   const w = api.ui.widgets;
   let pending = null;
   let reset = null;
-  return api.ui.preferencesPage({
+  return {
     mount(body) {
-      const line = w.statusLine();
-      let live = true;
-      const check = async () => {
-        if (!service.present) {
-          line.set(t("This editor has no play page beside it, so the engine cannot be reached from here. It is at scmjs.dev."), "warn");
-          return;
-        }
-        line.busy(t("Asking the engine\u2026"));
-        const s2 = await service.status();
-        if (!live) return;
-        if (!s2.available) line.set(s2.reason ?? t("The engine cannot run a game here."), "warn");
-        else if (s2.files === "archives") line.set(t("Ready. It plays from your StarCraft 1.16.1 files."), "ok");
-        else if (s2.files === "copy") line.set(t("Ready. It plays from the copy of StarCraft you gave the site."), "ok");
-        else line.set(t("Ready. It plays from this development server's files."), "ok");
-      };
-      const again = w.button(t("Check again"), { onClick: () => void check() });
-      again.hidden = !service.present;
       const races = () => [
         { value: 6, label: t("Random") },
         { value: 1, label: t("Terran") },
@@ -499,32 +482,69 @@ function registerPreferencesPage(api, service, settings) {
       };
       reset = () => show(DEFAULT_SETTINGS);
       body.append(
-        w.hint(t("scm-sim is the game engine behind the site's play page. This plugin lets other plugins use it: a replay tool can have a replay played to its end and learn what really happened in it, and a map can be started in a browser tab. Its one menu item is Tools \u25B8 Test Map in Browser.")),
-        w.hint(t("The engine runs in your browser from your own copy of StarCraft. A replay or a map handed to it is not stored and not sent anywhere.")),
-        line,
-        w.row(again),
-        w.group(
-          t("Test Map in Browser"),
-          w.form([
-            { label: t("Game type"), field: game },
-            { label: t("Your race"), field: race },
-            { label: t("Your slot"), field: slot },
-            { label: t("Computers"), field: computers },
-            { label: t("Computer race"), field: computerRace }
-          ]),
-          w.hint(t("From the map: Use Map Settings when the map has computer players or units placed beyond the start locations, melee otherwise. Choose on the play page: the map opens on the play page's setup screen, and nothing starts until you press Start Game there.")),
-          w.hint(t("Your slot is for Use Map Settings, the computers for melee. Where the map fixes a slot's race, or has fewer places, the map wins."))
-        )
+        w.form([
+          { label: t("Game type"), field: game },
+          { label: t("Your race"), field: race },
+          { label: t("Your slot"), field: slot },
+          { label: t("Computers"), field: computers },
+          { label: t("Computer race"), field: computerRace }
+        ]),
+        w.hint(t("From the map: Use Map Settings when the map has computer players or units placed beyond the start locations, melee otherwise. Choose on the play page: the map opens on the play page's setup screen, and nothing starts until you press Start Game there.")),
+        w.hint(t("Your slot is for Use Map Settings, the computers for melee. Where the map fixes a slot's race, or has fewer places, the map wins."))
       );
-      void check();
       return () => {
-        live = false;
         pending = null;
         reset = null;
       };
     },
     apply: () => pending?.(),
     reset: () => reset?.()
+  };
+}
+function registerPreferencesPage(api, service, form) {
+  const t = api.i18n.t;
+  const w = api.ui.widgets;
+  return api.ui.preferencesPage({
+    mount(body, page) {
+      const line = w.statusLine();
+      let live = true;
+      const check = async () => {
+        if (!service.present) {
+          line.set(t("This editor has no play page beside it, so the engine cannot be reached from here. It is at scmjs.dev."), "warn");
+          return;
+        }
+        line.busy(t("Asking the engine\u2026"));
+        const s = await service.status();
+        if (!live) return;
+        if (!s.available) line.set(s.reason ?? t("The engine cannot run a game here."), "warn");
+        else if (s.files === "archives") line.set(t("Ready. It plays from your StarCraft 1.16.1 files."), "ok");
+        else if (s.files === "copy") line.set(t("Ready. It plays from the copy of StarCraft you gave the site."), "ok");
+        else line.set(t("Ready. It plays from this development server's files."), "ok");
+      };
+      const again = w.button(t("Check again"), { onClick: () => void check() });
+      again.hidden = !service.present;
+      body.append(
+        w.hint(t("scm-sim is the game engine behind the site's play page. This plugin lets other plugins use it: a replay tool can have a replay played to its end and learn what really happened in it, and a map can be started in a browser tab.")),
+        w.hint(t("The engine runs in your browser from your own copy of StarCraft. A replay or a map handed to it is not stored and not sent anywhere.")),
+        line,
+        w.row(again)
+      );
+      let unmount;
+      if (form) {
+        const group = w.group(t("Test Map in Browser"));
+        body.append(group);
+        unmount = form.mount(group, page);
+      } else if (service.present) {
+        body.append(w.hint(t("Tools \u25B8 Test in Browser plays the open map in a tab. How it plays it is set under Edit \u25B8 Preferences \u25B8 Testing, beside StarCraft.")));
+      }
+      void check();
+      return () => {
+        live = false;
+        unmount?.();
+      };
+    },
+    apply: () => form?.apply?.(),
+    reset: () => form?.reset?.()
   });
 }
 
@@ -586,6 +606,12 @@ var PlayTab = class {
   }
 };
 
+// src/target.ts
+function testTargetCall(api) {
+  const call = api.ui.testTarget;
+  return typeof call === "function" ? call.bind(api.ui) : null;
+}
+
 // ko.ts
 var KO = {
   "Another map was started in its place.": "\uADF8 \uC790\uB9AC\uC5D0 \uB2E4\uB978 \uB9F5\uC774 \uC2DC\uC791\uB418\uC5C8\uC2B5\uB2C8\uB2E4.",
@@ -604,7 +630,7 @@ var KO = {
   "Ready. It plays from the copy of StarCraft you gave the site.": "\uC900\uBE44\uB418\uC5C8\uC2B5\uB2C8\uB2E4. \uC0AC\uC774\uD2B8\uC5D0 \uC81C\uACF5\uD55C StarCraft \uBCF5\uC0AC\uBCF8\uC73C\uB85C \uC2E4\uD589\uD569\uB2C8\uB2E4.",
   "Ready. It plays from this development server's files.": "\uC900\uBE44\uB418\uC5C8\uC2B5\uB2C8\uB2E4. \uC774 \uAC1C\uBC1C \uC11C\uBC84\uC758 \uD30C\uC77C\uB85C \uC2E4\uD589\uD569\uB2C8\uB2E4.",
   "Ready. It plays from your StarCraft 1.16.1 files.": "\uC900\uBE44\uB418\uC5C8\uC2B5\uB2C8\uB2E4. \uC0AC\uC6A9\uC790\uC758 StarCraft 1.16.1 \uD30C\uC77C\uB85C \uC2E4\uD589\uD569\uB2C8\uB2E4.",
-  "scm-sim is the game engine behind the site's play page. This plugin lets other plugins use it: a replay tool can have a replay played to its end and learn what really happened in it, and a map can be started in a browser tab. Its one menu item is Tools \u25B8 Test Map in Browser.": "scm-sim\uC740 \uC0AC\uC774\uD2B8\uC758 \uD50C\uB808\uC774 \uD398\uC774\uC9C0\uB97C \uC6C0\uC9C1\uC774\uB294 \uAC8C\uC784 \uC5D4\uC9C4\uC785\uB2C8\uB2E4. \uC774 \uD50C\uB7EC\uADF8\uC778\uC740 \uB2E4\uB978 \uD50C\uB7EC\uADF8\uC778\uC774 \uADF8 \uC5D4\uC9C4\uC744 \uC4F8 \uC218 \uC788\uAC8C \uD569\uB2C8\uB2E4. \uB9AC\uD50C\uB808\uC774 \uB3C4\uAD6C\uB294 \uB9AC\uD50C\uB808\uC774\uB97C \uB05D\uAE4C\uC9C0 \uC2E4\uD589\uD574 \uC2E4\uC81C\uB85C \uC77C\uC5B4\uB09C \uC77C\uC744 \uC54C\uC544\uB0BC \uC218 \uC788\uACE0, \uB9F5\uC744 \uBE0C\uB77C\uC6B0\uC800 \uD0ED\uC5D0\uC11C \uC2DC\uC791\uD560 \uC218\uB3C4 \uC788\uC2B5\uB2C8\uB2E4. \uBA54\uB274 \uD56D\uBAA9\uC740 \uB3C4\uAD6C \u25B8 \uBE0C\uB77C\uC6B0\uC800\uC5D0\uC11C \uB9F5 \uD14C\uC2A4\uD2B8 \uD558\uB098\uBFD0\uC785\uB2C8\uB2E4.",
+  "scm-sim is the game engine behind the site's play page. This plugin lets other plugins use it: a replay tool can have a replay played to its end and learn what really happened in it, and a map can be started in a browser tab.": "scm-sim\uC740 \uC0AC\uC774\uD2B8\uC758 \uD50C\uB808\uC774 \uD398\uC774\uC9C0\uB97C \uC6C0\uC9C1\uC774\uB294 \uAC8C\uC784 \uC5D4\uC9C4\uC785\uB2C8\uB2E4. \uC774 \uD50C\uB7EC\uADF8\uC778\uC740 \uB2E4\uB978 \uD50C\uB7EC\uADF8\uC778\uC774 \uADF8 \uC5D4\uC9C4\uC744 \uC4F8 \uC218 \uC788\uAC8C \uD569\uB2C8\uB2E4. \uB9AC\uD50C\uB808\uC774 \uB3C4\uAD6C\uB294 \uB9AC\uD50C\uB808\uC774\uB97C \uB05D\uAE4C\uC9C0 \uC2E4\uD589\uD574 \uC2E4\uC81C\uB85C \uC77C\uC5B4\uB09C \uC77C\uC744 \uC54C\uC544\uB0BC \uC218 \uC788\uACE0, \uB9F5\uC744 \uBE0C\uB77C\uC6B0\uC800 \uD0ED\uC5D0\uC11C \uC2DC\uC791\uD560 \uC218\uB3C4 \uC788\uC2B5\uB2C8\uB2E4.",
   "Terran": "\uD14C\uB780",
   "Test Map in Browser": "\uBE0C\uB77C\uC6B0\uC800\uC5D0\uC11C \uB9F5 \uD14C\uC2A4\uD2B8",
   "The browser did not let the play page open. Allow pop-ups for this site and try again.": "\uBE0C\uB77C\uC6B0\uC800\uAC00 \uD50C\uB808\uC774 \uD398\uC774\uC9C0\uB97C \uC5F4\uC9C0 \uBABB\uD558\uAC8C \uD588\uC2B5\uB2C8\uB2E4. \uC774 \uC0AC\uC774\uD2B8\uC758 \uD31D\uC5C5\uC744 \uD5C8\uC6A9\uD55C \uB4A4 \uB2E4\uC2DC \uC2DC\uB3C4\uD558\uC138\uC694.",
@@ -629,7 +655,11 @@ var KO = {
   "Your race": "\uB0B4 \uC885\uC871",
   "Your slot": "\uB0B4 \uC2AC\uB86F",
   "Your slot is for Use Map Settings, the computers for melee. Where the map fixes a slot's race, or has fewer places, the map wins.": "\uB0B4 \uC2AC\uB86F\uC740 \uC720\uC988 \uB9F5 \uC138\uD305\uC5D0, \uCEF4\uD4E8\uD130\uB294 \uBC00\uB9AC\uC5D0 \uC4F0\uC785\uB2C8\uB2E4. \uB9F5\uC774 \uC2AC\uB86F\uC758 \uC885\uC871\uC744 \uC815\uD574 \uB450\uC5C8\uAC70\uB098 \uC790\uB9AC\uAC00 \uB354 \uC801\uC73C\uBA74 \uB9F5\uC758 \uC124\uC815\uC744 \uB530\uB985\uB2C8\uB2E4.",
-  "Zerg": "\uC800\uADF8"
+  "Zerg": "\uC800\uADF8",
+  "This browser": "\uC774 \uBE0C\uB77C\uC6B0\uC800",
+  "Test in Browser": "\uBE0C\uB77C\uC6B0\uC800\uC5D0\uC11C \uD14C\uC2A4\uD2B8",
+  "The map plays in a tab of the site's play page, from your copy of StarCraft. Nothing has to be written to disk.": "\uB9F5\uC740 \uC0AC\uC6A9\uC790\uC758 StarCraft \uBCF5\uC0AC\uBCF8\uC73C\uB85C \uC0AC\uC774\uD2B8 \uD50C\uB808\uC774 \uD398\uC774\uC9C0\uC758 \uD0ED\uC5D0\uC11C \uC2E4\uD589\uB429\uB2C8\uB2E4. \uB514\uC2A4\uD06C\uC5D0 \uC544\uBB34\uAC83\uB3C4 \uC4F8 \uD544\uC694\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4.",
+  "Tools \u25B8 Test in Browser plays the open map in a tab. How it plays it is set under Edit \u25B8 Preferences \u25B8 Testing, beside StarCraft.": "\uB3C4\uAD6C \u25B8 \uBE0C\uB77C\uC6B0\uC800\uC5D0\uC11C \uD14C\uC2A4\uD2B8\uB294 \uC5F4\uB9B0 \uB9F5\uC744 \uD0ED\uC5D0\uC11C \uC2E4\uD589\uD569\uB2C8\uB2E4. \uC2E4\uD589 \uBC29\uC2DD\uC740 \uD3B8\uC9D1 \u25B8 \uD658\uACBD \uC124\uC815 \u25B8 \uD14C\uC2A4\uD2B8\uC5D0\uC11C \uC2A4\uD0C0\uD06C\uB798\uD504\uD2B8 \uC606\uC5D0 \uC124\uC815\uD569\uB2C8\uB2E4."
 };
 
 // plugin.ts
@@ -709,19 +739,30 @@ function activate(api) {
     }
   };
   const provided = api.services.provide("engine", service, { version: SERVICE_VERSION });
-  const page = registerPreferencesPage(api, service, settings);
-  const menu = address ? [
+  const said = (outcome) => outcome === "shown" ? t("The map is on the play page's setup screen.") : t("The map is running on the play page.");
+  const target = testTargetCall(api);
+  const form = address ? testSettingsForm(api, settings) : null;
+  const page = registerPreferencesPage(api, service, target ? null : form);
+  const menu = !address ? [] : target ? [
+    target({
+      label: msg("This browser"),
+      menuLabel: msg("Test in Browser"),
+      description: msg("The map plays in a tab of the site's play page, from your copy of StarCraft. Nothing has to be written to disk."),
+      run: async (map) => said(await tab.play(map, playHow(settings()))),
+      settings: form
+    })
+  ] : [
     api.commands.register({
       id: "play",
       title: msg("Test Map in Browser"),
       enabled: () => api.document.isOpen(),
       run: () => test().then(
-        (outcome) => api.ui.status(outcome === "shown" ? t("The map is on the play page's setup screen.") : t("The map is running on the play page.")),
+        (outcome) => api.ui.status(said(outcome)),
         (err) => api.ui.status(t("The play page could not start the map: {message}", { message: err instanceof Error ? err.message : String(err) }))
       )
     }),
     api.menu.add("Tools", { label: msg("Test Map in Browser"), icon: "plugin", after: "Test Map Settings\u2026", command: "play" })
-  ] : [];
+  ];
   return () => {
     for (const v of [...views]) v.dispose();
     for (const m of menu) m.dispose();
