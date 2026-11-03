@@ -17,7 +17,7 @@ export const KO: Record<string, string> = {
   "Ready. It plays from the copy of StarCraft you gave the site.": "준비되었습니다. 사이트에 제공한 StarCraft 복사본으로 실행합니다.",
   "Ready. It plays from this development server's files.": "준비되었습니다. 이 개발 서버의 파일로 실행합니다.",
   "Ready. It plays from your StarCraft 1.16.1 files.": "준비되었습니다. 사용자의 StarCraft 1.16.1 파일로 실행합니다.",
-  "scm-sim is the game engine behind the site's play page. This plugin lets other plugins use it: a replay tool can have a replay played to its end and learn what really happened in it, and a map can be started in a browser tab. Its one menu item is Tools ▸ Test Map in Browser.": "scm-sim은 사이트의 플레이 페이지를 움직이는 게임 엔진입니다. 이 플러그인은 다른 플러그인이 그 엔진을 쓸 수 있게 합니다. 리플레이 도구는 리플레이를 끝까지 실행해 실제로 일어난 일을 알아낼 수 있고, 맵을 브라우저 탭에서 시작할 수도 있습니다. 메뉴 항목은 도구 ▸ 브라우저에서 맵 테스트 하나뿐입니다.",
+  "scm-sim is the game engine behind the site's play page. This plugin lets other plugins use it: a replay tool can have a replay played to its end and learn what really happened in it, and a map can be started in a browser tab.": "scm-sim은 사이트의 플레이 페이지를 움직이는 게임 엔진입니다. 이 플러그인은 다른 플러그인이 그 엔진을 쓸 수 있게 합니다. 리플레이 도구는 리플레이를 끝까지 실행해 실제로 일어난 일을 알아낼 수 있고, 맵을 브라우저 탭에서 시작할 수도 있습니다.",
   "Terran": "테란",
   "Test Map in Browser": "브라우저에서 맵 테스트",
   "The browser did not let the play page open. Allow pop-ups for this site and try again.": "브라우저가 플레이 페이지를 열지 못하게 했습니다. 이 사이트의 팝업을 허용한 뒤 다시 시도하세요.",
@@ -43,4 +43,8 @@ export const KO: Record<string, string> = {
   "Your slot": "내 슬롯",
   "Your slot is for Use Map Settings, the computers for melee. Where the map fixes a slot's race, or has fewer places, the map wins.": "내 슬롯은 유즈 맵 세팅에, 컴퓨터는 밀리에 쓰입니다. 맵이 슬롯의 종족을 정해 두었거나 자리가 더 적으면 맵의 설정을 따릅니다.",
   "Zerg": "저그",
+  "This browser": "이 브라우저",
+  "Test in Browser": "브라우저에서 테스트",
+  "The map plays in a tab of the site's play page, from your copy of StarCraft. Nothing has to be written to disk.": "맵은 사용자의 StarCraft 복사본으로 사이트 플레이 페이지의 탭에서 실행됩니다. 디스크에 아무것도 쓸 필요가 없습니다.",
+  "Tools ▸ Test in Browser plays the open map in a tab. How it plays it is set under Edit ▸ Preferences ▸ Testing, beside StarCraft.": "도구 ▸ 브라우저에서 테스트는 열린 맵을 탭에서 실행합니다. 실행 방식은 편집 ▸ 환경 설정 ▸ 테스트에서 스타크래프트 옆에 설정합니다.",
 };
