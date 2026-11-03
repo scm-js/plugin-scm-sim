@@ -4,8 +4,8 @@ A library plugin for [scmJS](https://github.com/scm-js/scm-js), the browser-base
 Brood War map editor. It connects the editor to scm-sim, the game engine behind the site's
 play page at [scmjs.dev/play](https://scmjs.dev/play/).
 
-It adds one menu item, **Tools ▸ Test Map in Browser**, which plays the open map on the play
-page in a tab of its own. Everything else is for other plugins. They use it to:
+It adds one way to test a map: **Test in Browser**, which plays the open map on the play page
+in a tab of its own. Everything else is for other plugins. They use it to:
 
 - play a replay to its end without showing it, and get back what happened in it;
 - start a map on the play page;
@@ -46,11 +46,13 @@ The engine runs the game from your own copy of StarCraft. If the browser has non
 site your game on the Game Data page. **Edit ▸ Preferences ▸ Plugins ▸ scm-sim** says
 whether the engine can run a game now.
 
-## Test Map in Browser
+## Test in Browser
 
-**Tools ▸ Test Map in Browser** plays the open map on the play page, as Save would write it.
-Testing again sends the new version to the same tab. How the map is played is set under
-**Edit ▸ Preferences ▸ Plugins ▸ scm-sim**:
+**Tools ▸ Test in Browser** plays the open map on the play page, as Save would write it.
+Testing again sends the new version to the same tab. On **Edit ▸ Preferences ▸ Testing**,
+*Send the map to* chooses between this and StarCraft for **Tools ▸ Test Map**, Ctrl+F5 and the
+toolbar's Test button; at scmjs.dev it is this one until you choose. How the map is played
+is set on the same page:
 
 - Game type: *From the map* (the default), *Use Map Settings*, *Melee*, or *Choose on the play
   page*. *From the map* plays Use Map Settings when the map has computer players or units
@@ -59,7 +61,9 @@ Testing again sends the new version to the same tab. How the map is played is se
 - For melee, the number of computer players and their race.
 
 The [user guide](https://docs.scmjs.dev/guide/checking-testing-and-saving/#test-map) has
-more on each setting.
+more on each setting. An editor from before 0.8.6 has no *Send the map to*: there the item is
+**Tools ▸ Test Map in Browser**, and its settings are under **Edit ▸ Preferences ▸ Plugins ▸
+scm-sim**.
 
 ## Use it from a plugin
 
