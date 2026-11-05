@@ -1,65 +1,74 @@
 # scm-sim
 
 A library plugin for [scmJS](https://github.com/scm-js/scm-js), the browser-based StarCraft 1 /
-Brood War map editor. It is the way from the editor to scm-sim, the game engine behind the
-site's play page at [scmjs.dev/play](https://scmjs.dev/play/).
+Brood War map editor. It connects the editor to scm-sim, the game engine behind the site's
+play page at [scmjs.dev/play](https://scmjs.dev/play/).
 
-It adds one menu item, **Tools ▸ Test Map in Browser**, which plays the open map on the play
-page in a tab of its own. Everything else is for other plugins, which use it to:
+It adds one way to test a map: **Test in Browser**, which plays the open map on the play page
+in a tab of its own. Everything else is for other plugins. They use it to:
 
-- **play a replay to its end** without showing it, and get back what happened: every unit
-  made, finished and lost, with where and when; each player's minerals, gas, supply,
-  workers and army through the game; what was researched; and where units stood;
-- **start a map** on the play page, in a browser tab.
+- play a replay to its end without showing it, and get back what happened in it;
+- start a map on the play page;
+- work out a map's pathing as the game walks it;
+- measure groups through chokes and each base's mining;
+- play a replay's fights again;
+- show a replay inside the editor with the game's own graphics.
 
 The plugin holds no engine. The engine is a separate program served beside the editor, and
 the plugin talks to it by message inside your browser. A replay or a map handed over is not
 stored and not sent anywhere.
 
-## Where it works
-
-Only where the editor is served beside the play page: at scmjs.dev, or on a stand-in for the
-site on your own machine. In the desktop app, or an editor hosted somewhere else, the service
-is there but says it is not present, and a plugin that uses it should fall back to what it
-can do without.
-
-The engine runs the game from your own copy of StarCraft. If the browser has none, give the
-site your game on the Game Data page. **Edit ▸ Preferences ▸ Plugins ▸ scm-sim** says
-whether the engine can run a game now.
-
-## Test Map in Browser
-
-**Tools ▸ Test Map in Browser** plays the open map on the play page, as Save would write it.
-Testing again sends the new version to the same tab. How it is played is set on the
-plugin's page under **Edit ▸ Preferences ▸ Plugins ▸ scm-sim**:
-
-| Setting | What it does |
-| --- | --- |
-| Game type | *From the map* (the default): Use Map Settings when the map has computer players or units placed beyond the start locations, melee otherwise. *Use Map Settings* or *Melee*: always that. *Choose on the play page*: the map opens on the play page's setup screen and nothing starts until Start Game there. |
-| Your race | Random, Terran, Protoss or Zerg. In Use Map Settings, only where the map leaves the race to the player. |
-| Your slot | Use Map Settings only: the first slot open to a person, or a player you name (when the map opens that slot to a person). |
-| Computers, Computer race | Melee only: how many computer players, up to the places the map has, and their race. |
-
-A play page from before these settings plays every map with its own settings.
-
 ## Install
 
-In scmJS: **Plugins ▸ Manage Plugins…**, paste
+scm-sim comes with the editor and starts on. If you removed it, open
+**Plugins ▸ Manage Plugins…**, paste
 
 ```
 https://github.com/scm-js/plugin-scm-sim
 ```
 
-and press **Add**. A plugin that needs it names it in its own manifest, and the editor
+and press **Add**. A plugin that needs scm-sim names it in its own manifest, and the editor
 installs both together:
 
 ```json
 { "requires": ["github:scm-js/plugin-scm-sim"] }
 ```
 
+## Where it works
+
+It works only where the editor is served beside the play page: at
+[scmjs.dev/editor](https://scmjs.dev/editor/), or on a stand-in for the site on your own
+machine. In the desktop app, or an editor hosted somewhere else, the service is there but
+says it is not present. A plugin that uses it should then fall back to what it can do
+without it.
+
+The engine runs the game from your own copy of StarCraft. If the browser has none, give the
+site your game on the Game Data page. **Edit ▸ Preferences ▸ Plugins ▸ scm-sim** says
+whether the engine can run a game now.
+
+## Test in Browser
+
+**Tools ▸ Test in Browser** plays the open map on the play page, as Save would write it.
+Testing again sends the new version to the same tab. On **Edit ▸ Preferences ▸ Testing**,
+*Send the map to* chooses between this and StarCraft for **Tools ▸ Test Map**, Ctrl+F5 and the
+toolbar's Test button; at scmjs.dev it is this one until you choose. How the map is played
+is set on the same page:
+
+- Game type: *From the map* (the default), *Use Map Settings*, *Melee*, or *Choose on the play
+  page*. *From the map* plays Use Map Settings when the map has computer players or units
+  placed beyond the start locations, and melee otherwise.
+- Your race, and your slot for Use Map Settings.
+- For melee, the number of computer players and their race.
+
+The [user guide](https://docs.scmjs.dev/guide/checking-testing-and-saving/#test-map) has
+more on each setting. An editor from before 0.8.6 has no *Send the map to*: there the item is
+**Tools ▸ Test Map in Browser**, and its settings are under **Edit ▸ Preferences ▸ Plugins ▸
+scm-sim**.
+
 ## Use it from a plugin
 
-Copy [`contract.d.ts`](contract.d.ts) into your plugin and import it as types only.
+Copy [`contract.d.ts`](contract.d.ts) into your plugin and import it as types only. It has
+every type and option, with comments. This section is an overview.
 
 ```ts
 import type { ScmSimService } from "./vendor/scm-sim";
@@ -78,15 +87,18 @@ api.services.watch<ScmSimService>("scm-sim.engine", (sim) => {
 });
 ```
 
+Some methods came in later versions of the plugin or need a newer play page. Each section
+below says what to check before offering one.
+
 ### `status()`
 
-Asks the engine whether it can run a game now. `available` is false with a `reason` in words
-when the browser has no copy of StarCraft, or the engine's page did not answer.
+Asks the engine whether it can run a game now. `available` is false, with a `reason` in
+words, when the browser has no copy of StarCraft or the engine's page did not answer.
 
 ### `analyse(replay, options?)`
 
 `replay` is a whole `.rep` file. A twenty-minute game takes about ten to fifteen seconds. One
-replay runs at a time; further calls wait their turn. The engine uses about a gigabyte of
+replay runs at a time, and further calls wait their turn. The engine uses about a gigabyte of
 memory while it runs and gives it back when the replay ends.
 
 The answer is a `ReplayTimeline`:
@@ -96,61 +108,67 @@ The answer is a `ReplayTimeline`:
 | `events` | One entry each time a unit is `born`, `done` (finished), `morph`s into another type, is `given` to another player, or `died`. Each has the frame, the unit's number, its type, owner and place in pixels. A `died` event also names the unit credited with the kill (`by`, `byType`, `byOwner`, `byX`, `byY`) where the game credited one. |
 | `research` | Upgrades and technologies as they finish, per player. |
 | `samples` | Every 48 frames by default (two seconds at Fastest): each player's minerals, gas, supply used and available, finished workers, army size, army cost and finished buildings. |
-| `positions` | At the same frames, where every unit stood. Buildings and units inside a transport or bunker are left out. Typed arrays; `start[i]` to `start[i + 1]` are the rows of sample `i`. |
+| `positions` | At the same frames, where every unit stood. Buildings and units inside a transport or bunker are left out. Typed arrays: `start[i]` to `start[i + 1]` are the rows of sample `i`. |
+| `sight` | When each player could see each unit of the other players, as the game decides it: fog hides a unit, and a cloaked or burrowed unit is seen only by players who detect it. Each row is one stretch: a unit, the player who saw it, the frames from and to, and `by`, the player's unit nearest to having it in sight (or 0xFFFFFFFF). The game does not record which unit sees what, so `by` is the likeliest seer. Typed arrays. From timeline version 5 (scm-sim 0.11.0). |
 | `players`, `map`, `frames`, `total`, `ended` | The players as the replay names them, the map's size in tiles, how far the game was played and how it stopped. |
-| `check` | Whether the game the engine played stayed the game in the replay. `parted` is null when it did, else the frame from which the timeline is no longer what happened. See below. |
+| `check` | Whether the game the engine played stayed the game in the replay. `parted` is null when it did. Otherwise it is the frame from which the timeline no longer matches what happened. See [Replays it can play](#replays-it-can-play). |
 
-A unit's number is the timeline's own, counted from 0 in the order units appear, and stays
-with the unit for its whole life. Things to know when reading the events:
+`sampleEvery` and `positionsEvery` change the two intervals. `positionsEvery: 0` leaves the
+positions out.
+
+A unit's number is the timeline's own. It is counted from 0 in the order units appear and
+stays with the unit for its whole life. When reading the events:
 
 - A Zerg unit is a chain of morphs: a larva is born, morphs into an egg, the egg morphs into
   the unit, and then it is done. A drone morphs into the building it becomes.
 - A refinery, extractor or assimilator is a morph of the geyser it stands on.
-- A player who leaves gives every unit to a neutral player; these are `given` events, not
-  deaths.
+- A player who leaves gives every unit to a neutral player. These are `given` events.
 - A kill is the game's own credit: a reaver gets its scarab's kills, a carrier its
   interceptors'. Scarabs and spider mines that go off are deaths with no killer, and so is
-  what a spider mine killed. When several units fall in the same instant the pairing of
-  killer and victim is the likeliest one, not a certain one.
-
-`sampleEvery` and `positionsEvery` change the two intervals; `positionsEvery: 0` leaves the
-positions out.
+  what a spider mine killed. When several units fall in the same instant, the pairing of
+  killer and victim is the likeliest one.
 
 ### `play(map?)`
 
-Starts a map on the play page in a tab of its own; the next call uses the same tab. Leave
-`map` out to play the open map as Save would write it. It is played as the Preferences
-page says (above); with *Choose on the play page* it is put on the setup screen and
-resolves when it is shown there. Call it from the click that asks for
-it, because a browser only lets a click open a tab. It resolves when the game is on the page.
+Starts a map on the play page in a tab of its own. The next call uses the same tab. Leave
+`map` out to play the open map as Save would write it. It is played as the plugin's
+preferences say. With *Choose on the play page*, it resolves when the map is on the setup
+screen. Otherwise it resolves when the game is on the page.
+
+Call it from the click that asks for it, because a browser only lets a click open a tab.
 
 ### `pathing(scenario?, options?)`
 
-Since 0.7.0, and only where the play page answers it: `status().pathing` is a number there
-and null on an older page. Check for both before offering it.
+Since 0.7.0. Check that `pathing` exists and that `status().pathing` is a number (it is null
+on an older play page).
 
 The game's own pathing for a map. Leave `scenario` out for the open map, or pass a bare
-scenario (`.chk` bytes). Nothing is shown and nobody plays: the engine starts the map on a
-copy made for the purpose and only gives units move orders. That copy has a neutral Nexus
-on every start location, the test units, and none of the map's triggers. A StarEdit copy of
-the game is enough for it.
+scenario (`.chk` bytes). Nothing is shown and nobody plays. The engine starts the map on a
+copy made for the purpose, with a neutral Nexus on every start location, the test units and
+none of the map's triggers, and gives the units move orders. A StarEdit copy of the game is
+enough for it.
 
 The answer is a `PathingResult`:
 
 | Field | What it holds |
 | --- | --- |
-| `regions` | The regions the game divides the map into when it loads it, which is what it plans ground routes over. `grid` holds a region id for every 8 × 8 px cell of the map. Per region: whether it is `walkable`, its `group` (ground of one group is joined; different groups are not), its centre, its size in tiles and its neighbours. Typed arrays. |
+| `regions` | The regions the game divides the map into when it loads it, which it plans ground routes over. `grid` holds a region id for every 8 × 8 px cell. Per region: whether it is `walkable`, its `group` (ground of one group is joined), its centre, its size in tiles and its neighbours. Typed arrays. |
 | `walks` | One per unit and pair of places: the unit type, `from` and `to` (and the start locations' slots), the `outcome`, the `frames` it took (24 a second at Fastest), the pixels it `travelled`, how far from `to` it ended, how many regions it crossed, and its route (`x`, `y` every `every` frames). |
 | `starts`, `map` | The map's start locations and its size in tiles. |
 
-`outcome` is `arrived`, `stopped` (it stopped short: the game found no way all the way
-there, or gave up on a long route), `stuck` (it stood still for ten seconds still meaning to
-move), `limit` (still walking when `limit` ran out), `apart` (not walked: the two places
-are on ground that does not join) or `unmoved`.
+`outcome` is one of:
+
+- `arrived`.
+- `stopped`: it stopped short. The game found no way all the way there, or gave up on a
+  long route.
+- `stuck`: it stood still for ten seconds while still meaning to move.
+- `limit`: still walking when `limit` ran out.
+- `apart`: not walked, because the two places are on ground that does not join.
+- `unmoved`.
 
 By default it walks a Probe, Zergling, Dragoon, Siege Tank and Ultralisk from each start
 location to every later one. Each start location walked from is a game of its own, a few
-seconds each: a 4-player map takes about eight seconds, an 8-player map about forty.
+seconds each. A 4-player map takes about eight seconds, an 8-player map about forty.
 Options:
 
 - `units`: other ground units (units.dat ids).
@@ -162,35 +180,31 @@ Options:
 
 ### `measure(scenario?, options?)`
 
-Since 0.8.0, and only where the play page answers it: `status().measure` is a number
-there and null on an older page. Check for both before offering it.
+Since 0.8.0. Check that `measure` exists and that `status().measure` is a number.
 
-Measures of a map taken by the game itself. Leave `scenario` out for the open map, or
-pass a bare scenario (`.chk` bytes). As for `pathing`, nothing is shown, nobody plays, and
-a StarEdit copy of the game is enough.
+Measures of a map taken by the game itself. Leave `scenario` out for the open map, or pass a
+bare scenario. As with `pathing`, nothing is shown, nobody plays, and a StarEdit copy of the
+game is enough.
 
-- **Groups** (`groups`): `count` units of a type (at most 12, one selection) made at `from`.
-  The one nearest `to` walks there alone, then the whole group walks there together, both
-  from the same moment. Each is timed as it gets *through*: two tiles past the middle of
-  the way, where the choke is when `from` and `to` are its two ends. Timing there, and not
-  at `to`, leaves out the jostling of a group for one point after it is through. For each
-  group you get the frames for the one alone (`alone`), for the first and the last of the
-  group (`first`, `last`), and how many got through or got stuck. `last − alone` is the
-  time the group spent queueing: through a choke, the price of its width. Groups near each other run in different games, so a group standing idle
-  is never in another's way.
-- **Bases** (`bases`, and `starts: true` for every start location): a Nexus on the hall
-  spot and 24 Probes waiting a few tiles away. For each worker count (`workers`, default
-  8, 16 and 24), that many Probes are sent to the base's mineral fields, nearest first, and
-  after 25 seconds the minerals taken from the base's own fields are counted for two game
-  minutes. The result is `perMinute` at each count. A spot the game will not take a Nexus
-  on is reported (`hallMade: false`). Gas is not measured, because a trigger cannot
-  build an Assimilator.
+- Groups (`groups`): `count` units of a type (at most 12, one selection) are made at `from`.
+  The one nearest `to` walks there alone, then the whole group walks there together. Each is
+  timed as it gets through: two tiles past the middle of the way, which is the choke when
+  `from` and `to` are its two ends. You get the frames for the one alone (`alone`), for the
+  first and last of the group (`first`, `last`), and how many got through or got stuck.
+  `last − alone` is the time the group spent queueing. Groups near each other run in
+  separate games, so an idle group never blocks another.
+- Bases (`bases`, and `starts: true` for every start location): a Nexus on the hall spot and
+  24 Probes a few tiles away. For each worker count (`workers`, default 8, 16 and 24), that
+  many Probes go to the base's mineral fields, nearest first. After 25 seconds, the minerals
+  taken from the base's own fields are counted for two game minutes. The result is
+  `perMinute` at each count. A spot the game will not take a Nexus on is reported
+  (`hallMade: false`). Gas is not measured, because a trigger cannot build an Assimilator.
 
 A 4-player map's start locations plus two groups take about ten seconds.
 
 ### `test(scenario, module, payload, options?)` and `testCopies(scenario, module, payload, options)`
 
-Since 0.11.0, and only where the play page answers them: check `status().tests` and
+Since 0.13.0, and only where the play page answers them: check `status().tests` and
 `status().copies`. TrigScript uses these to run a script's tests in the game itself.
 
 `test` starts the map as Save builds it (a whole `.scx`) in the game, with EUD allowed and
@@ -210,13 +224,44 @@ You get back one answer per copy, in the order of `players`. Each copy uses abou
 gigabyte of memory. The copies share memory with each other, which Chrome and Edge allow on
 the play page from version 137. On other browsers `status().copies` is null.
 
+### `fights(replay, fights, options?)`
+
+Since 0.11.0. Check that `fights` exists and that `status().fights` is a number.
+
+Plays a replay's fights again in the game, from just before each. Pass the whole replay
+file, and for each fight its frames (`from`, the first loss, and `to`, the last) and the box
+around what fell, in pixels, as your own analysis found them. Each fight is played in two
+versions, measured the same way so they compare:
+
+- `played`: the replay's own commands, as recorded.
+- `attackMove`: the units that can attack, and the Medics, attack-move to the middle of the
+  box. Nobody gives any other command anywhere until the fight ends. Production already
+  queued finishes and walks to its rally point, and nothing new is started.
+
+Ask for `versions: ["played", "attackMove", "handsOff"]` to add a version with no commands
+at all.
+
+The game decides which units took part: every unit of the sides that came into the box while
+the fight was played, wherever it stood at the start. For each side you get:
+
+- those units and their cost;
+- the ones dead at the end, and their cost;
+- the cost of what the side has inside the box at the end, units that arrived later
+  included.
+
+The replay is played once from its start and stops at each fight. That takes about as long
+as `analyse` takes to reach the last fight, plus a second or two per fight. Two fights late
+in a 22-minute game take about eleven seconds.
+
 ### `view(element)`
 
-Since 0.5.0. The game itself, drawn inside an element of yours and filling it: a replay
-played with the game's own graphics (Remastered's where the person's copy has them) and
-its console, which you drive. The engine is about a gigabyte of memory, so keep one view
-and load replays into it in turn. Check that `view` is there before calling it; an older
-copy of this plugin has none.
+Since 0.5.0. Check that `view` exists before calling it.
+
+The game itself, drawn inside an element of yours and filling it. It plays a replay with the
+game's own graphics (Remastered's, where the person's copy has them), and you drive it. The
+engine takes about a gigabyte of memory, so keep one view and load replays into it in turn.
+Inside the editor, put the element in `api.ui.mapView`. That element is never moved, so the
+game does not restart when the person switches to the map and back.
 
 ```ts
 const view = sim.view(element);
@@ -230,68 +275,47 @@ await view.options({ remastered: true, lighting: false, fog: false });
 view.dispose();
 ```
 
-`camera(x, y)` looks at a point of the map in pixels and `player(slot)` picks whose eyes
-the fog is drawn through. Since 0.6.0, `camera(x, y, height)` also sets how much of the map
-shows top to bottom, from 240 to 1920 pixels (960 before 0.9.0; the game's own view is 480), so the game can
-match the scale of the map it replaces. This works only while the console is hidden, and it
-is hidden unless you ask for it with `options({ console: true })`. `onUnits` hears the
-squares the game's minimap would draw (each one's middle and size in map pixels, and its
-colour) up to eight times a second, so you can draw a minimap of your own, such as the
-editor's.
+The rest of the view, in short (`contract.d.ts` has the details):
 
-Also since 0.6.0, `follow(track)` hands the view a camera path for the whole game: where
-the middle of the view is every few frames, with the points where it cuts. The game moves
-its camera along it as it draws, by the frame it shows, so the camera keeps in step with the
-picture and stays smooth at any speed. Moving the camera with `camera(x, y)` on every frame
-report can't do that, because the reports come only ten times a second. The track holds
-until `camera`, another track, `follow(null)`, or the person moving the view, which comes
-to `onCamera` with `byUser`. Check `follows` on the loaded replay first, since an older page
-ignores a track.
-
-With the fog on, the squares come with the fog itself: `fog` has a byte per tile, row by row,
-`wide` tiles to a row (0 never seen, 1 seen before, 2 seen now), so a minimap of your own can
-darken its ground the way the game's does. `onHover` hears what the pointer is on, for a
-tooltip of your own, since the view shows the game without its console: the unit's type,
-owner, hit points, shields and energy, what it is making or researching and how far along it
-is, its training queue, and where the pointer is. It comes up to thirty times a second while
-the unit or the pointer moves, and null once the pointer is on nothing. In a replay this
-covers every player's units, as the game's replay console does, but only what the eyes the
-game is seen through can see.
-
-A key pressed while the view has the keyboard and that it does
-not use itself (all but the arrows, which scroll) comes to `onKey` and is pressed again on
-the editor's window, so the editor's hotkeys and every plugin's still work. Since 0.9.0 the
-wheel over the view comes to `onWheel`, with the map pixel under the pointer: the game does
-nothing with it, and keeps Ctrl and the wheel from zooming the browser's tab, so hand it to
-the editor's map view (`view.wheel(w)`) and the game zooms the way the map does. Since 0.10.0
-`onPointer` says the map pixel under the pointer as it moves over the map, and null once it
-leaves, for the editor's status bar (`view.setPointer(p)`). Inside the
-editor, `api.ui.mapView` is the place for the element: it is never moved, so the game is
-not started again when the person switches to the map and back.
+- `camera(x, y, height?)` looks at a point of the map, in pixels. `height` (since 0.6.0) is
+  how much of the map shows top to bottom, from 240 to 1920 pixels (960 before 0.9.0). It
+  works only while the console is hidden, which it is unless you ask for
+  `options({ console: true })`.
+- `follow(track)` (since 0.6.0) moves the camera along a path for the whole game, in step
+  with the frames the game draws. Use it for a smooth camera: frame reports come only ten
+  times a second. Check `follows` on the loaded replay first.
+- `player(slot)` picks whose eyes the fog is drawn through.
+- `onUnits` gives the squares the game's minimap would draw, up to eight times a second, and
+  with the fog on, the fog per tile (0 never seen, 1 seen before, 2 seen now).
+- `onHover` (since 0.6.0) gives the unit under the pointer, for a tooltip of your own.
+- `onKey` gives the keys the game does not use (all but the arrows). Each is also pressed
+  again on the editor's window, so the editor's and other plugins' hotkeys still work.
+- `onWheel` (since 0.9.0) gives the wheel over the view. Hand it to the editor's map view
+  (`view.wheel(w)`) and the game zooms the way the map does.
+- `onPointer` (since 0.10.0) gives the map pixel under the pointer, for the editor's status
+  bar (`view.setPointer(p)`).
 
 ## Replays it can play
 
-The engine runs StarCraft 1.16.1's own game code. A replay written by 1.16.1 is given to it
-as it is. A replay written by 1.18 or StarCraft: Remastered is first rewritten in 1.16.1's
-form, inside the browser, and then played the same way.
+The engine runs StarCraft 1.16.1's own game code. A replay written by 1.16.1 is played as it
+is. A replay written by 1.18 or StarCraft: Remastered is first rewritten in 1.16.1's form,
+inside the browser, and then played the same way.
 
 Two kinds of Remastered game cannot be played, and `analyse` rejects with a message that
 says which:
 
-- **A map on Remastered's terrain, with a copy of StarCraft from 1.16.1.** Remastered added
-  tiles to seven of the eight tilesets and its ladder maps use them. The game needs the
-  tilesets the map was made for, so such a replay plays only when the copy of StarCraft in
-  the browser was made from a Remastered installation.
-- **A game that held more than 1,700 units at once.** Remastered raised that limit and
-  1.16.1's game has no room for the rest.
+- A map on Remastered's terrain, with a copy of StarCraft from 1.16.1. Remastered added
+  tiles to seven of the eight tilesets, and its ladder maps use them. Such a replay plays
+  only when the browser's copy of StarCraft was made from a Remastered installation.
+- A game that held more than 1,700 units at once. Remastered raised that limit, and 1.16.1's
+  game has no room for the rest.
 
-A replay has no record of the game to compare against, only the players' commands. So the
-engine checks each command as it runs: a command names the unit it is for, and a command
-for a unit the game has not made yet means the game being played is no longer the one that
-was recorded. `check.parted` is the frame of the first such command, or null. It has been
-null to the last frame in every 1.16.1 and Remastered replay tried so far. If a game passes
-one of 1.16.1's other limits (100 bullets in the air, 2,500 sprites), Remastered's game and
-this one go different ways from there, and `parted` is how that shows.
+A replay holds only the players' commands, with no record of the game to compare against.
+So the engine checks each command as it runs. A command for a unit the game has not made yet
+means the game being played has drifted from the one recorded. `check.parted` is the frame
+of the first such command, or null. It has been null to the last frame in every 1.16.1 and
+Remastered replay tried so far. A game that passes one of 1.16.1's other limits (100 bullets
+in the air, 2,500 sprites) would drift there, and `parted` shows where.
 
 ## Development
 
@@ -302,9 +326,9 @@ npm test
 npm run build      # dist/plugin.js, the bundle the editor loads
 ```
 
-The conversation with the engine's pages is written at the top of `src/bridge.ts` (replay
-analysis) and `src/play.ts` (playing a map). The timeline types in `contract.d.ts` are a copy
-of the engine's own; `ReplayTimeline.version` says which form a timeline has.
+The messages exchanged with the engine's pages are listed at the top of `src/bridge.ts`
+(replay analysis) and `src/play.ts` (playing a map). The timeline types in `contract.d.ts`
+are a copy of the engine's own. `ReplayTimeline.version` says which form a timeline has.
 
 ## License
 

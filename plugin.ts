@@ -3,9 +3,10 @@
  * the way from the editor to scm-sim, the game engine behind the site's play page. It has
  * no editor of its own and no engine in it; it holds one service, `scm-sim.engine`, that
  * other plugins reach the engine through — a replay played to its end for what happened
- * in it, a map's pathing as the game walks it, measures of a map taken by the game, a map started in a browser tab — one menu item, Tools ▸ Test Map in Browser, and
- * a page under Edit ▸ Preferences ▸ Plugins: whether the engine can run a game, and how
- * Test Map in Browser plays the map (`src/settings.ts`). The engine is another program on the editor's own origin, talked to by message
+ * in it, a map's pathing as the game walks it, measures of a map taken by the game, a map started in a browser tab. That last is
+ * Test in Browser, one of the editor's test targets (`src/target.ts`): a choice beside StarCraft on Edit ▸ Preferences ▸
+ * Testing, with how it plays the map (`src/settings.ts`) under it. A page under Edit ▸ Preferences ▸ Plugins says whether
+ * the engine can run a game. The engine is another program on the editor's own origin, talked to by message
  * (`src/bridge.ts`, `src/play.ts`). See `contract.d.ts` for the service and README.md for
  * the rest.
  */
@@ -14,9 +15,10 @@ import type { ScmSimService } from "./contract";
 import { simAddress } from "./src/address";
 import { Bridge, domFrames } from "./src/bridge";
 import { domViewFrames, pressOnWindow, ViewBridge } from "./src/view";
-import { registerPreferencesPage } from "./src/page";
+import { registerPreferencesPage, testSettingsForm } from "./src/page";
 import { PlayTab } from "./src/play";
 import { playHow, readSettings, SETTINGS_KEY } from "./src/settings";
+import { testTargetCall } from "./src/target";
 import { KO } from "./ko";
 
 /** Marks a string the editor translates when it draws it (a menu label, a command's title), so the catalogue's test finds it. */
@@ -40,6 +42,7 @@ export function activate(api: PluginApi): () => void {
     noDebug: t("The engine's page cannot debug a test in the game yet. Reload the editor and try again."),
     sessionOver: t("That debugging session is over."),
     noCopies: t("A test of several players runs a copy of the game for each, which needs memory shared between them: this browser does not allow that on the engine's page (Chrome and Edge from version 137 do), or the page is from before it."),
+    noFights: t("The engine's page cannot play a fight again yet. Reload the editor and try again."),
   });
   const tab = address && new PlayTab(address, {
     blocked: t("The browser did not let the play page open. Allow pop-ups for this site and try again."),
@@ -67,7 +70,7 @@ export function activate(api: PluginApi): () => void {
   const views = new Set<ViewBridge>();
   const service: ScmSimService = {
     present: address !== null,
-    status: async () => bridge ? bridge.status() : { available: false, files: null, reason: absent().message, timeline: null, pathing: null, measure: null, tests: null, copies: null, debug: null },
+    status: async () => bridge ? bridge.status() : { available: false, files: null, reason: absent().message, timeline: null, pathing: null, measure: null, tests: null, copies: null, debug: null, fights: null },
     analyse: async (replay, options) => { if (!bridge) throw absent(); return bridge.analyse(replay, options); },
     play: async (map) => { await test(map); },
     pathing: async (scenario, options) => {
@@ -81,6 +84,7 @@ export function activate(api: PluginApi): () => void {
     test: async (scenario, module, payload, options) => { if (!bridge) throw absent(); return bridge.test(scenario, module, payload, options); },
     testCopies: async (scenario, module, payload, options) => { if (!bridge) throw absent(); return bridge.testCopies(scenario, module, payload, options); },
     debug: async (scenario, module, payload, options) => { if (!bridge) throw absent(); return bridge.debug(scenario, module, payload, options); },
+    fights: async (replay, fights, options) => { if (!bridge) throw absent(); return bridge.fights(replay, fights, options); },
     view: (element) => {
       if (!address) throw absent();
       const view = new ViewBridge(address.view, element, domViewFrames(address.origin), {
@@ -99,19 +103,30 @@ export function activate(api: PluginApi): () => void {
     },
   };
   const provided = api.services.provide("engine", service, { version: SERVICE_VERSION });
-  const page = registerPreferencesPage(api, service, settings);
-  // Tools ▸ Test Map in Browser, where there is a play page to hand the map to.
-  const menu = address ? [
+  const said = (outcome: "started" | "shown") => outcome === "shown" ? t("The map is on the play page's setup screen.") : t("The map is running on the play page.");
+  // Test in Browser: one of the editor's test targets where it has them, its own Tools item where it has not.
+  const target = testTargetCall(api);
+  const form = address ? testSettingsForm(api, settings) : null;
+  const page = registerPreferencesPage(api, service, target ? null : form);
+  const menu = !address ? [] : target ? [
+    target({
+      label: msg("This browser"),
+      menuLabel: msg("Test in Browser"),
+      description: msg("The map plays in a tab of the site's play page, from your copy of StarCraft. Nothing has to be written to disk."),
+      run: async (map) => said(await tab!.play(map, playHow(settings()))),
+      settings: form!,
+    }),
+  ] : [
     api.commands.register({
       id: "play",
       title: msg("Test Map in Browser"),
       enabled: () => api.document.isOpen(),
       run: () => test().then(
-        (outcome) => api.ui.status(outcome === "shown" ? t("The map is on the play page's setup screen.") : t("The map is running on the play page.")),
+        (outcome) => api.ui.status(said(outcome)),
         (err) => api.ui.status(t("The play page could not start the map: {message}", { message: err instanceof Error ? err.message : String(err) })),
       ),
     }),
     api.menu.add("Tools", { label: msg("Test Map in Browser"), icon: "plugin", after: "Test Map Settings…", command: "play" }),
-  ] : [];
+  ];
   return () => { for (const v of [...views]) v.dispose(); for (const m of menu) m.dispose(); provided.dispose(); page.dispose(); bridge?.close(); tab?.dispose(); catalogue.dispose(); };
 }

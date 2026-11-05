@@ -108,8 +108,28 @@ export interface ReplayCheck {
   parted: number | null;
 }
 
+/**
+ * When each player could see each unit of the others', as the game decides it: a unit under a player's fog is not
+ * seen by them, and a cloaked or burrowed one only by the players who detect it. A row is one stretch: `unit` (the
+ * timeline's number) seen by `player` from frame `from` up to `to`. Looked at every `every` frames (8); a unit
+ * unseen for less than a second stays in the same stretch. Units in a transport or a bunker are not looked at, nor
+ * the neutral players' units.
+ *
+ * `by`: the player's own unit (the timeline's number) that saw it when the stretch began, or 0xFFFFFFFF for none
+ * found. The game keeps no such record: it is the player's unit nearest to having the seen unit in sight (its range,
+ * with the sight upgrades, and the seen unit's size), within 8 tiles of that. The likeliest seer, not the game's word.
+ */
+export interface Sightings {
+  every: number;
+  unit: Uint32Array;
+  player: Uint8Array;
+  from: Uint32Array;
+  to: Uint32Array;
+  by: Uint32Array;
+}
+
 export interface ReplayTimeline {
-  /** 1: as first written. 2: a `died` event says who killed the unit. 3: `check`. 4: what each player gathered. */
+  /** 1: as first written. 2: a `died` event says who killed the unit. 3: `check`. 4: what each player gathered. 5: `sight`. */
   version: number;
   /** Frames played, and the replay's length. */
   frames: number;
@@ -127,6 +147,8 @@ export interface ReplayTimeline {
   positions: Positions | null;
   /** From timeline version 3; absent in a timeline of an engine before that. */
   check?: ReplayCheck | null;
+  /** Who saw what, when; from timeline version 5, absent before. */
+  sight?: Sightings | null;
 }
 
 export interface AnalyseProgress {
@@ -179,7 +201,7 @@ export interface ScmSimStatus {
   /**
    * The version of the request for a test of several players the engine's page answers (`testCopies`); null when it
    * could not be asked, its page is from before it, or the browser cannot run copies of the game in step (they share
-   * memory, which Chrome and Edge from 137 allow there). From scm-sim 0.11.0.
+   * memory, which Chrome and Edge from 137 allow there). From scm-sim 0.13.0.
    */
   copies?: number | null;
   /**
@@ -187,6 +209,69 @@ export interface ScmSimStatus {
    * could not be asked or its page is from before it (scm-sim with TrigScript 4's debugger).
    */
   debug?: number | null;
+  /**
+   * The `FightsResult.version` the engine answers `fights` with; null when it could not be
+   * asked or its page is from before `fights`.
+   */
+  fights?: number | null;
+}
+
+/* ── A replay's fights played again (`ScmSimService.fights`) ── */
+
+/**
+ * A fight to play again: its frames (from the first loss to the last) and the box, in pixels,
+ * around what fell, as an analysis of the replay found them; and the players whose units
+ * take part (left out: every player in the game).
+ */
+export interface FightAsk { from: number; to: number; x0: number; y0: number; x1: number; y1: number; players?: number[] }
+/**
+ * How a fight is played again. `played`: the replay's own commands. `attackMove`: the units
+ * of the sides that took part (every unit that came into the box as it was played, wherever
+ * it stood at the start) that can attack, and Medics, attack-move to the middle of the box,
+ * and nobody gives any other command anywhere for the fight's length (production already
+ * queued finishes and walks to its rally; nothing new is started). `handsOff`: no commands
+ * at all.
+ */
+export type FightVersion = "played" | "attackMove" | "handsOff";
+/** One side of a version: the units that took part, and what became of them. Costs are minerals + gas, a pair's half for Zerglings and Scourge. */
+export interface FightSideResult {
+  player: number;
+  /** Units that took part (buildings, larvae, eggs, interceptors, scarabs and mines not counted), and their cost. */
+  units: number;
+  value: number;
+  /** Of those, the ones dead at the end, and their cost. */
+  lost: number;
+  lostValue: number;
+  /** Cost of the side's units inside the box at the end, those that came later included. */
+  holding: number;
+}
+export interface FightVersionResult { version: FightVersion; sides: FightSideResult[]; ms: number }
+export interface FightResult {
+  /** The frames the versions ran over: from a little before the first loss to a little after the last. */
+  start: number;
+  end: number;
+  /** Units the attack-move version gave orders to. */
+  ordered: number;
+  versions: FightVersionResult[];
+}
+export interface FightsResult {
+  version: number;
+  /** In the order asked; null for a fight the replay ends before. */
+  fights: (FightResult | null)[];
+}
+export interface FightsProgress { stage: "starting" | "playing"; frame: number; frames: number }
+export interface FightsOptions {
+  /** Default `["played", "attackMove"]`. */
+  versions?: FightVersion[];
+  /** Frames before the first loss the versions start at (default 48), after the last they end at (default 120). */
+  lead?: number;
+  tail?: number;
+  /** Pixels the box is widened by on every side (default 256). */
+  margin?: number;
+  /** `frame` of `frames`: the replay played up to the last fight's start. */
+  onProgress?(progress: FightsProgress): void;
+  /** Aborting stops the game and rejects the promise with an `AbortError`. */
+  signal?: AbortSignal;
 }
 
 /* ── A map's measures (`ScmSimService.measure`) ── */
@@ -720,7 +805,7 @@ export interface ScmSimService {
    * which this resolves with. Nothing is drawn and nobody plays. One request runs at a time,
    * replays included. The module runs with the engine page's rights; it is taken only from the
    * editor of the same origin. Needs a play page that answers it (`status().tests`): check both
-   * that this function is there and that before offering it. From scm-sim 0.11.0.
+   * that this function is there and that before offering it. From scm-sim 0.13.0.
    */
   test?(scenario: Uint8Array, module: string, payload: unknown, options?: TestRunOptions): Promise<unknown>;
   /**
@@ -728,7 +813,7 @@ export interface ScmSimService {
    * player, kept in step as a game between people is (scm-sim `src/exact/copies.ts`), each running the module's
    * `drive(game, payload)` over a handle that also knows the copies (`game.copy`: every player's screen, and where
    * the copies stopped agreeing). Resolves with each copy's answer, in the order of `players`. A gigabyte of memory a
-   * copy. Needs a play page that answers it (`status().copies`): check both before offering it. From scm-sim 0.11.0.
+   * copy. Needs a play page that answers it (`status().copies`): check both before offering it. From scm-sim 0.13.0.
    */
   testCopies?(scenario: Uint8Array, module: string, payload: unknown, options: TestCopiesOptions): Promise<TestCopyResult[]>;
   /**
@@ -739,4 +824,14 @@ export interface ScmSimService {
    * it (`status().debug`).
    */
   debug?(scenario: Uint8Array, module: string, payload: unknown, options?: TestRunOptions): Promise<ScmSimDebugSession>;
+  /**
+   * A replay's fights played again by the game from just before each: as recorded, and with
+   * both sides only attack-moving (`FightsOptions.versions`), each measured the same way, so
+   * the two compare. `replay` is a whole .rep file. The replay is played once from its start
+   * and stops at each fight: about as long as `analyse` takes to reach the last one, and a
+   * second or two a fight. One request runs at a time, replays included. Rejects with an
+   * `Error` worded for the person. Added in 0.11.0, and needs a play page that answers it
+   * (`status().fights`): check both before offering it.
+   */
+  fights?(replay: Uint8Array, fights: FightAsk[], options?: FightsOptions): Promise<FightsResult>;
 }
