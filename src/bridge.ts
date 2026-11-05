@@ -15,6 +15,18 @@
  *   → `{ type: "scmjs.sim.measure", id, chk, options? }`            a map's measures (from scm-sim 0.8.0, whose
  *                                                                   `ready` says `measure`); progress `measuring`
  *   ← `{ type: "scmjs.sim.measured", id, measure }`
+ *   → `{ type: "scmjs.sim.test", id, chk, module, payload }`        a script's tests beside the game (a page whose
+ *                                                                   `ready` says `tests`)
+ *   ← `{ type: "scmjs.sim.tested", id, report }`
+ *   → `{ type: "scmjs.sim.test", id, chk, module, payload, players, triggers }` a test of several players, a copy of the
+ *                                                                   game each (a page whose `ready` says `copies`)
+ *   ← `{ type: "scmjs.sim.tested", id, copies }`
+ *   → `{ type: "scmjs.sim.debug", id, chk, module, payload }`       one test recorded for the debugger (a page whose
+ *                                                                   `ready` says `debug`); its game stays, a session
+ *   ← `{ type: "scmjs.sim.debugged", id, recording }`
+ *   → `{ type: "scmjs.sim.picture", id, session, frame }`           the session's game at a frame
+ *   ← `{ type: "scmjs.sim.pictured", id, frame, kept }`
+ *   → `{ type: "scmjs.sim.cancel", id }`                            with a session's id: the session is over
  *   → `{ type: "scmjs.sim.fights", id, replay, fights, options? }` a replay's fights played again (a page whose
  *                                                                   `ready` says `fights`); progress `playing`
  *   ← `{ type: "scmjs.sim.fought", id, result }`
@@ -23,7 +35,7 @@
  * page looks for the game's files once, when it loads. Nothing here touches the DOM
  * directly: the frame is behind `FrameHost`, so the conversation is tested without one.
  */
-import type { FightAsk, FightsOptions, FightsProgress, FightsResult, AnalyseOptions, MeasureOptions, MeasureProgress, MeasureResult, PathingOptions, PathingProgress, PathingResult, ReplayTimeline, ScmSimStatus } from "../contract";
+import type { FightAsk, FightsOptions, FightsProgress, FightsResult, ScmSimDebugSession, ScmSimPicture, AnalyseOptions, MeasureOptions, MeasureProgress, MeasureResult, PathingOptions, PathingProgress, PathingResult, ReplayTimeline, ScmSimStatus, TestCopiesOptions, TestCopyResult, TestRunOptions } from "../contract";
 
 export interface Frame {
   post(message: object): void;
@@ -41,11 +53,19 @@ export interface BridgeWords {
   noPathing: string;
   /** The page is from before a map's measures. */
   noMeasure: string;
+  /** The page is from before a script's tests. */
+  noTests: string;
+  /** The page cannot run copies of the game in step (from before them, or the browser cannot). */
+  noCopies: string;
+  /** The page is from before the debugger. */
+  noDebug: string;
+  /** A picture asked of a session that is over. */
+  sessionOver: string;
   /** The page is from before fights played again. */
   noFights: string;
 }
 
-interface Ready { version: number | null; pathing: number | null; measure: number | null; fights: number | null; files: ScmSimStatus["files"]; why: string | null }
+interface Ready { version: number | null; pathing: number | null; measure: number | null; tests: number | null; copies: number | null; debug: number | null; fights: number | null; files: ScmSimStatus["files"]; why: string | null }
 /** What the page said of a request on its way: its progress message, as it came. */
 type Heard = { stage?: unknown; frame?: unknown; frames?: unknown; done?: unknown; total?: unknown };
 interface Pending { resolve(v: unknown): void; reject(e: Error): void; progress?(m: Heard): void; done(): void }
@@ -63,6 +83,8 @@ export class Bridge {
   private nextId = 1;
   /** The page has been asked for and has not yet said it is ready. */
   private opening = false;
+  /** The debugger's sessions the page holds a game for: while there are any, the page is not loaded afresh. */
+  private readonly sessions = new Set<number>();
   private readonly url: string;
   private readonly host: FrameHost;
   private readonly words: BridgeWords;
@@ -78,12 +100,12 @@ export class Bridge {
     this.ready = new Promise<Ready>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error(this.words.noAnswer)), this.readyMs);
       this.frame = this.host(this.url, (data) => {
-        const m = data as Heard & { type?: unknown; id?: unknown; version?: unknown; pathing?: unknown; measure?: unknown; fights?: unknown; files?: unknown; why?: unknown; timeline?: unknown; message?: unknown } | null;
+        const m = data as Heard & { type?: unknown; id?: unknown; version?: unknown; pathing?: unknown; measure?: unknown; tests?: unknown; copies?: unknown; debug?: unknown; fights?: unknown; files?: unknown; why?: unknown; timeline?: unknown; message?: unknown } | null;
         if (!m || typeof m.type !== "string") return;
         if (m.type === "scmjs.sim.ready") {
           clearTimeout(timer);
           const files = m.files === "archives" || m.files === "copy" || m.files === "server" ? m.files : null;
-          resolve({ version: typeof m.version === "number" ? m.version : null, pathing: typeof m.pathing === "number" ? m.pathing : null, measure: typeof m.measure === "number" ? m.measure : null, fights: typeof m.fights === "number" ? m.fights : null, files, why: typeof m.why === "string" ? m.why : null });
+          resolve({ version: typeof m.version === "number" ? m.version : null, pathing: typeof m.pathing === "number" ? m.pathing : null, measure: typeof m.measure === "number" ? m.measure : null, tests: typeof m.tests === "number" ? m.tests : null, copies: typeof m.copies === "number" ? m.copies : null, debug: typeof m.debug === "number" ? m.debug : null, fights: typeof m.fights === "number" ? m.fights : null, files, why: typeof m.why === "string" ? m.why : null });
           return;
         }
         const p = typeof m.id === "number" ? this.pending.get(m.id) : undefined;
@@ -92,6 +114,9 @@ export class Bridge {
         else if (m.type === "scmjs.sim.result") { p.done(); p.resolve(m.timeline); }
         else if (m.type === "scmjs.sim.pathed") { p.done(); p.resolve((m as { pathing?: unknown }).pathing); }
         else if (m.type === "scmjs.sim.measured") { p.done(); p.resolve((m as { measure?: unknown }).measure); }
+        else if (m.type === "scmjs.sim.debugged") { p.done(); p.resolve((m as { recording?: unknown }).recording); }
+        else if (m.type === "scmjs.sim.pictured") { p.done(); const k = m as { frame?: unknown; kept?: unknown }; p.resolve({ frame: Number(k.frame) || 0, kept: k.kept }); }
+        else if (m.type === "scmjs.sim.tested") { p.done(); const t = m as { report?: unknown; copies?: unknown }; p.resolve(Array.isArray(t.copies) ? t.copies : t.report); }
         else if (m.type === "scmjs.sim.fought") { p.done(); p.resolve((m as { result?: unknown }).result); }
         else if (m.type === "scmjs.sim.error") { p.done(); p.reject(new Error(String(m.message ?? ""))); }
       });
@@ -106,12 +131,12 @@ export class Bridge {
   /** Whether the engine can run a game now. The page is loaded again, so a copy of the game made since is found. */
   async status(): Promise<ScmSimStatus> {
     // (Not while a replay is running or the page is still loading for one.)
-    if (this.pending.size === 0 && !this.opening) this.close();
+    if (this.pending.size === 0 && !this.opening && this.sessions.size === 0) this.close();
     try {
       const r = await this.open();
-      return { available: r.files !== null, files: r.files, reason: r.files ? null : r.why ?? this.words.noFiles, timeline: r.version, pathing: r.pathing, measure: r.measure, fights: r.fights };
+      return { available: r.files !== null, files: r.files, reason: r.files ? null : r.why ?? this.words.noFiles, timeline: r.version, pathing: r.pathing, measure: r.measure, tests: r.tests, copies: r.copies, debug: r.debug, fights: r.fights };
     } catch (err) {
-      return { available: false, files: null, reason: err instanceof Error ? err.message : String(err), timeline: null, pathing: null, measure: null, fights: null };
+      return { available: false, files: null, reason: err instanceof Error ? err.message : String(err), timeline: null, pathing: null, measure: null, tests: null, copies: null, debug: null, fights: null };
     }
   }
 
@@ -133,6 +158,44 @@ export class Bridge {
     const { signal, onProgress, ...asked } = options;
     const progress = onProgress && ((m: Heard) => onProgress({ stage: m.stage === "measuring" ? "measuring" : "starting", done: Number(m.done) || 0, total: Number(m.total) || 0 } satisfies MeasureProgress));
     return this.ask<MeasureResult>(signal, progress, (id) => ({ type: "scmjs.sim.measure", id, chk: scenario.slice(), options: asked }), (r) => (r.measure === null ? this.words.noMeasure : null));
+  }
+
+  /** A script's tests beside the game: the scenario as eudplib built it, the module's text and its payload, as they are. */
+  async test(scenario: Uint8Array, module: string, payload: unknown, options: TestRunOptions = {}): Promise<unknown> {
+    const progress = options.onProgress && (() => options.onProgress!({ stage: "starting" }));
+    return this.ask<unknown>(options.signal, progress, (id) => ({ type: "scmjs.sim.test", id, chk: scenario.slice(), module, payload }), (r) => (r.tests === null ? this.words.noTests : null));
+  }
+
+  /** A test of several players: a copy of the game each, in step; each copy's answer, in the order of `players`. */
+  async testCopies(scenario: Uint8Array, module: string, payload: unknown, options: TestCopiesOptions): Promise<TestCopyResult[]> {
+    const progress = options.onProgress && (() => options.onProgress!({ stage: "starting" }));
+    return this.ask<TestCopyResult[]>(options.signal, progress, (id) => ({ type: "scmjs.sim.test", id, chk: scenario.slice(), module, payload, players: [...options.players], triggers: options.triggers ?? null }), (r) => (r.copies === null ? this.words.noCopies : null));
+  }
+
+  /**
+   * One test recorded for the debugger: the page runs it once with everything written down and keeps its game, for
+   * pictures of the run's frames until the session is closed. One session at a time: a new one ends the one before.
+   */
+  async debug(scenario: Uint8Array, module: string, payload: unknown, options: TestRunOptions = {}): Promise<ScmSimDebugSession> {
+    const progress = options.onProgress && (() => options.onProgress!({ stage: "starting" }));
+    let id = 0;
+    const recording = await this.ask<unknown>(options.signal, progress, (n) => { id = n; return { type: "scmjs.sim.debug", id: n, chk: scenario.slice(), module, payload }; }, (r) => (r.debug === null ? this.words.noDebug : null));
+    for (const other of this.sessions) this.sessions.delete(other);
+    this.sessions.add(id);
+    const frame = this.frame;
+    const live = () => this.sessions.has(id) && this.frame === frame;
+    return {
+      recording,
+      get closed() { return !live(); },
+      picture: async (at: number, o: { signal?: AbortSignal } = {}): Promise<ScmSimPicture> => {
+        if (!live()) throw new Error(this.words.sessionOver);
+        return this.ask<ScmSimPicture>(o.signal, undefined, (n) => ({ type: "scmjs.sim.picture", id: n, session: id, frame: at }));
+      },
+      close: () => {
+        if (!this.sessions.delete(id)) return;
+        if (this.frame === frame) this.frame?.post({ type: "scmjs.sim.cancel", id });
+      },
+    };
   }
 
   /** A replay's fights played again: `replay` is a whole .rep file. */
@@ -161,6 +224,7 @@ export class Bridge {
 
   /** The frame is taken away; whatever was running is told it will not be answered. */
   close(): void {
+    this.sessions.clear();
     this.frame?.remove();
     this.frame = null;
     this.ready = null;

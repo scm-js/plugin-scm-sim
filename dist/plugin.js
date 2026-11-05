@@ -21,6 +21,8 @@ var Bridge = class {
   nextId = 1;
   /** The page has been asked for and has not yet said it is ready. */
   opening = false;
+  /** The debugger's sessions the page holds a game for: while there are any, the page is not loaded afresh. */
+  sessions = /* @__PURE__ */ new Set();
   url;
   host;
   words;
@@ -42,7 +44,7 @@ var Bridge = class {
         if (m.type === "scmjs.sim.ready") {
           clearTimeout(timer);
           const files2 = m.files === "archives" || m.files === "copy" || m.files === "server" ? m.files : null;
-          resolve({ version: typeof m.version === "number" ? m.version : null, pathing: typeof m.pathing === "number" ? m.pathing : null, measure: typeof m.measure === "number" ? m.measure : null, fights: typeof m.fights === "number" ? m.fights : null, files: files2, why: typeof m.why === "string" ? m.why : null });
+          resolve({ version: typeof m.version === "number" ? m.version : null, pathing: typeof m.pathing === "number" ? m.pathing : null, measure: typeof m.measure === "number" ? m.measure : null, tests: typeof m.tests === "number" ? m.tests : null, copies: typeof m.copies === "number" ? m.copies : null, debug: typeof m.debug === "number" ? m.debug : null, fights: typeof m.fights === "number" ? m.fights : null, files: files2, why: typeof m.why === "string" ? m.why : null });
           return;
         }
         const p = typeof m.id === "number" ? this.pending.get(m.id) : void 0;
@@ -57,6 +59,17 @@ var Bridge = class {
         } else if (m.type === "scmjs.sim.measured") {
           p.done();
           p.resolve(m.measure);
+        } else if (m.type === "scmjs.sim.debugged") {
+          p.done();
+          p.resolve(m.recording);
+        } else if (m.type === "scmjs.sim.pictured") {
+          p.done();
+          const k = m;
+          p.resolve({ frame: Number(k.frame) || 0, kept: k.kept });
+        } else if (m.type === "scmjs.sim.tested") {
+          p.done();
+          const t = m;
+          p.resolve(Array.isArray(t.copies) ? t.copies : t.report);
         } else if (m.type === "scmjs.sim.fought") {
           p.done();
           p.resolve(m.result);
@@ -78,12 +91,12 @@ var Bridge = class {
   }
   /** Whether the engine can run a game now. The page is loaded again, so a copy of the game made since is found. */
   async status() {
-    if (this.pending.size === 0 && !this.opening) this.close();
+    if (this.pending.size === 0 && !this.opening && this.sessions.size === 0) this.close();
     try {
       const r = await this.open();
-      return { available: r.files !== null, files: r.files, reason: r.files ? null : r.why ?? this.words.noFiles, timeline: r.version, pathing: r.pathing, measure: r.measure, fights: r.fights };
+      return { available: r.files !== null, files: r.files, reason: r.files ? null : r.why ?? this.words.noFiles, timeline: r.version, pathing: r.pathing, measure: r.measure, tests: r.tests, copies: r.copies, debug: r.debug, fights: r.fights };
     } catch (err) {
-      return { available: false, files: null, reason: err instanceof Error ? err.message : String(err), timeline: null, pathing: null, measure: null, fights: null };
+      return { available: false, files: null, reason: err instanceof Error ? err.message : String(err), timeline: null, pathing: null, measure: null, tests: null, copies: null, debug: null, fights: null };
     }
   }
   async analyse(replay, options = {}) {
@@ -101,6 +114,46 @@ var Bridge = class {
     const { signal, onProgress, ...asked } = options;
     const progress = onProgress && ((m) => onProgress({ stage: m.stage === "measuring" ? "measuring" : "starting", done: Number(m.done) || 0, total: Number(m.total) || 0 }));
     return this.ask(signal, progress, (id) => ({ type: "scmjs.sim.measure", id, chk: scenario.slice(), options: asked }), (r) => r.measure === null ? this.words.noMeasure : null);
+  }
+  /** A script's tests beside the game: the scenario as eudplib built it, the module's text and its payload, as they are. */
+  async test(scenario, module, payload, options = {}) {
+    const progress = options.onProgress && (() => options.onProgress({ stage: "starting" }));
+    return this.ask(options.signal, progress, (id) => ({ type: "scmjs.sim.test", id, chk: scenario.slice(), module, payload }), (r) => r.tests === null ? this.words.noTests : null);
+  }
+  /** A test of several players: a copy of the game each, in step; each copy's answer, in the order of `players`. */
+  async testCopies(scenario, module, payload, options) {
+    const progress = options.onProgress && (() => options.onProgress({ stage: "starting" }));
+    return this.ask(options.signal, progress, (id) => ({ type: "scmjs.sim.test", id, chk: scenario.slice(), module, payload, players: [...options.players], triggers: options.triggers ?? null }), (r) => r.copies === null ? this.words.noCopies : null);
+  }
+  /**
+   * One test recorded for the debugger: the page runs it once with everything written down and keeps its game, for
+   * pictures of the run's frames until the session is closed. One session at a time: a new one ends the one before.
+   */
+  async debug(scenario, module, payload, options = {}) {
+    const progress = options.onProgress && (() => options.onProgress({ stage: "starting" }));
+    let id = 0;
+    const recording = await this.ask(options.signal, progress, (n) => {
+      id = n;
+      return { type: "scmjs.sim.debug", id: n, chk: scenario.slice(), module, payload };
+    }, (r) => r.debug === null ? this.words.noDebug : null);
+    for (const other of this.sessions) this.sessions.delete(other);
+    this.sessions.add(id);
+    const frame = this.frame;
+    const live = () => this.sessions.has(id) && this.frame === frame;
+    return {
+      recording,
+      get closed() {
+        return !live();
+      },
+      picture: async (at, o = {}) => {
+        if (!live()) throw new Error(this.words.sessionOver);
+        return this.ask(o.signal, void 0, (n) => ({ type: "scmjs.sim.picture", id: n, session: id, frame: at }));
+      },
+      close: () => {
+        if (!this.sessions.delete(id)) return;
+        if (this.frame === frame) this.frame?.post({ type: "scmjs.sim.cancel", id });
+      }
+    };
   }
   /** A replay's fights played again: `replay` is a whole .rep file. */
   async fights(replay, fights, options = {}) {
@@ -133,6 +186,7 @@ var Bridge = class {
   }
   /** The frame is taken away; whatever was running is told it will not be answered. */
   close() {
+    this.sessions.clear();
     this.frame?.remove();
     this.frame = null;
     this.ready = null;
@@ -171,6 +225,11 @@ var ViewBridge = class {
   frame;
   words;
   loading = null;
+  debugging = null;
+  /** The page's `ready` said it draws a debugged run's pictures. */
+  debugs = false;
+  errors = /* @__PURE__ */ new Set();
+  shown = /* @__PURE__ */ new Set();
   looksWaiting = [];
   frames = /* @__PURE__ */ new Set();
   cameras = /* @__PURE__ */ new Set();
@@ -194,6 +253,7 @@ var ViewBridge = class {
       switch (m.type) {
         case "scmjs.view.ready": {
           clearTimeout(timer);
+          this.debugs = typeof m.debug === "number";
           const f = files(m.files);
           answered({ files: f, reason: f ? null : typeof m.why === "string" && m.why ? m.why : words.noFiles });
           return;
@@ -213,9 +273,23 @@ var ViewBridge = class {
           return;
         }
         case "scmjs.view.error": {
-          const l = this.loading;
-          this.loading = null;
-          l?.reject(new Error(String(m.message ?? "")));
+          const message = String(m.message ?? "");
+          const l = this.loading ?? this.debugging;
+          if (l === this.loading) this.loading = null;
+          else this.debugging = null;
+          if (l) l.reject(new Error(message));
+          else for (const e of this.errors) e(message);
+          return;
+        }
+        case "scmjs.view.debugged": {
+          const d = this.debugging;
+          this.debugging = null;
+          d?.resolve({ map: { width: Number(m.map?.width) || 0, height: Number(m.map?.height) || 0 } });
+          return;
+        }
+        case "scmjs.view.shown": {
+          const f = Number(m.frame) || 0;
+          for (const l of this.shown) l(f);
           return;
         }
         case "scmjs.view.looks": {
@@ -275,6 +349,35 @@ var ViewBridge = class {
       this.loading = { resolve, reject };
       this.frame.post({ type: "scmjs.view.load", replay: replay.slice(), name });
     });
+  }
+  /**
+   * A debugged run's built map (TrigScript 4, A5), started as the engine's page started it for the record: the view
+   * then draws the run's pictures (`show`) and never plays. Rejects on a page from before it, or a copy of the game
+   * that may only watch.
+   */
+  async debug(map) {
+    const r = await this.ready;
+    if (this.closed) throw new Error(this.words.closed);
+    if (!r.files) throw new Error(r.reason ?? this.words.noFiles);
+    if (!this.debugs) throw new Error(this.words.noDebug);
+    this.loading?.reject(new Error(this.words.replaced));
+    this.loading = null;
+    this.debugging?.reject(new Error(this.words.replaced));
+    return new Promise((resolve, reject) => {
+      this.debugging = { resolve, reject };
+      this.frame.post({ type: "scmjs.view.debug", map: map.slice() });
+    });
+  }
+  /** Draws a picture of the debugged run (`ScmSimDebugSession.picture`); `onShown` hears when it is up. */
+  show(picture) {
+    this.tell({ type: "scmjs.view.show", kept: picture.kept });
+  }
+  onShown(listener) {
+    return this.listen(this.shown, listener);
+  }
+  /** What went wrong with no request waiting on it (a picture that could not be drawn). */
+  onError(listener) {
+    return this.listen(this.errors, listener);
   }
   tell(message) {
     if (!this.closed) this.frame.post(message);
@@ -337,7 +440,11 @@ var ViewBridge = class {
     this.closed = true;
     this.loading?.reject(new Error(this.words.closed));
     this.loading = null;
+    this.debugging?.reject(new Error(this.words.closed));
+    this.debugging = null;
     this.looksWaiting.length = 0;
+    this.errors.clear();
+    this.shown.clear();
     this.frames.clear();
     this.cameras.clear();
     this.keys.clear();
@@ -640,6 +747,11 @@ var KO = {
   "The engine's page cannot work out a map's pathing yet. Reload the editor and try again.": "\uC5D4\uC9C4 \uD398\uC774\uC9C0\uAC00 \uC544\uC9C1 \uB9F5\uC758 \uACBD\uB85C\uB97C \uACC4\uC0B0\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4. \uD3B8\uC9D1\uAE30\uB97C \uC0C8\uB85C \uACE0\uCE5C \uB4A4 \uB2E4\uC2DC \uC2DC\uB3C4\uD558\uC138\uC694.",
   "There is no map open.": "\uC5F4\uB9B0 \uB9F5\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.",
   "The engine's page cannot measure a map yet. Reload the editor and try again.": "\uC5D4\uC9C4 \uD398\uC774\uC9C0\uAC00 \uC544\uC9C1 \uB9F5\uC744 \uCE21\uC815\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4. \uD3B8\uC9D1\uAE30\uB97C \uC0C8\uB85C \uACE0\uCE5C \uB4A4 \uB2E4\uC2DC \uC2DC\uB3C4\uD558\uC138\uC694.",
+  "The engine's page cannot run a script's tests in the game yet. Reload the editor and try again.": "\uC5D4\uC9C4 \uD398\uC774\uC9C0\uAC00 \uC544\uC9C1 \uAC8C\uC784\uC5D0\uC11C \uC2A4\uD06C\uB9BD\uD2B8\uC758 \uD14C\uC2A4\uD2B8\uB97C \uC2E4\uD589\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4. \uD3B8\uC9D1\uAE30\uB97C \uC0C8\uB85C \uACE0\uCE5C \uB4A4 \uB2E4\uC2DC \uC2DC\uB3C4\uD558\uC138\uC694.",
+  "The engine's page cannot debug a test in the game yet. Reload the editor and try again.": "\uC5D4\uC9C4 \uD398\uC774\uC9C0\uAC00 \uC544\uC9C1 \uAC8C\uC784\uC5D0\uC11C \uD14C\uC2A4\uD2B8\uB97C \uB514\uBC84\uADF8\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4. \uD3B8\uC9D1\uAE30\uB97C \uC0C8\uB85C \uACE0\uCE5C \uB4A4 \uB2E4\uC2DC \uC2DC\uB3C4\uD558\uC138\uC694.",
+  "That debugging session is over.": "\uADF8 \uB514\uBC84\uAE45 \uC138\uC158\uC740 \uB05D\uB0AC\uC2B5\uB2C8\uB2E4.",
+  "The game view cannot draw a debugged run yet. Reload the editor and try again.": "\uAC8C\uC784 \uBCF4\uAE30\uAC00 \uC544\uC9C1 \uB514\uBC84\uADF8 \uC911\uC778 \uC2E4\uD589\uC744 \uADF8\uB9B4 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4. \uD3B8\uC9D1\uAE30\uB97C \uC0C8\uB85C \uACE0\uCE5C \uB4A4 \uB2E4\uC2DC \uC2DC\uB3C4\uD558\uC138\uC694.",
+  "A test of several players runs a copy of the game for each, which needs memory shared between them: this browser does not allow that on the engine's page (Chrome and Edge from version 137 do), or the page is from before it.": "\uC5EC\uB7EC \uD50C\uB808\uC774\uC5B4\uC758 \uD14C\uC2A4\uD2B8\uB294 \uD50C\uB808\uC774\uC5B4\uB9C8\uB2E4 \uAC8C\uC784\uC744 \uD558\uB098\uC529 \uC2E4\uD589\uD558\uBA70, \uC774 \uAC8C\uC784\uB4E4\uC740 \uBA54\uBAA8\uB9AC\uB97C \uACF5\uC720\uD574\uC57C \uD569\uB2C8\uB2E4. \uC774 \uBE0C\uB77C\uC6B0\uC800\uB294 \uC5D4\uC9C4 \uD398\uC774\uC9C0\uC5D0\uC11C \uC774\uB97C \uD5C8\uC6A9\uD558\uC9C0 \uC54A\uAC70\uB098(Chrome\uACFC Edge\uB294 137 \uBC84\uC804\uBD80\uD130 \uD5C8\uC6A9\uD569\uB2C8\uB2E4) \uD398\uC774\uC9C0\uAC00 \uADF8\uBCF4\uB2E4 \uC624\uB798\uB418\uC5C8\uC2B5\uB2C8\uB2E4.",
   "The engine's page cannot play a fight again yet. Reload the editor and try again.": "\uC5D4\uC9C4 \uD398\uC774\uC9C0\uAC00 \uC544\uC9C1 \uC804\uD22C\uB97C \uB2E4\uC2DC \uC7AC\uC0DD\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4. \uD3B8\uC9D1\uAE30\uB97C \uC0C8\uB85C \uACE0\uCE5C \uB4A4 \uB2E4\uC2DC \uC2DC\uB3C4\uD558\uC138\uC694.",
   "Another replay was loaded in its place.": "\uADF8 \uC790\uB9AC\uC5D0 \uB2E4\uB978 \uB9AC\uD50C\uB808\uC774\uB97C \uBD88\uB7EC\uC654\uC2B5\uB2C8\uB2E4.",
   "The game view was closed.": "\uAC8C\uC784 \uD654\uBA74\uC774 \uB2EB\uD614\uC2B5\uB2C8\uB2E4.",
@@ -676,6 +788,10 @@ function activate(api) {
     closed: t("The engine was closed before it finished."),
     noPathing: t("The engine's page cannot work out a map's pathing yet. Reload the editor and try again."),
     noMeasure: t("The engine's page cannot measure a map yet. Reload the editor and try again."),
+    noTests: t("The engine's page cannot run a script's tests in the game yet. Reload the editor and try again."),
+    noDebug: t("The engine's page cannot debug a test in the game yet. Reload the editor and try again."),
+    sessionOver: t("That debugging session is over."),
+    noCopies: t("A test of several players runs a copy of the game for each, which needs memory shared between them: this browser does not allow that on the engine's page (Chrome and Edge from version 137 do), or the page is from before it."),
     noFights: t("The engine's page cannot play a fight again yet. Reload the editor and try again.")
   });
   const tab = address && new PlayTab(address, {
@@ -700,7 +816,7 @@ function activate(api) {
   const views = /* @__PURE__ */ new Set();
   const service = {
     present: address !== null,
-    status: async () => bridge ? bridge.status() : { available: false, files: null, reason: absent().message, timeline: null, pathing: null, measure: null, fights: null },
+    status: async () => bridge ? bridge.status() : { available: false, files: null, reason: absent().message, timeline: null, pathing: null, measure: null, tests: null, copies: null, debug: null, fights: null },
     analyse: async (replay, options) => {
       if (!bridge) throw absent();
       return bridge.analyse(replay, options);
@@ -716,6 +832,18 @@ function activate(api) {
       if (!bridge) throw absent();
       return bridge.measure(scenario ?? await openScenario(), options);
     },
+    test: async (scenario, module, payload, options) => {
+      if (!bridge) throw absent();
+      return bridge.test(scenario, module, payload, options);
+    },
+    testCopies: async (scenario, module, payload, options) => {
+      if (!bridge) throw absent();
+      return bridge.testCopies(scenario, module, payload, options);
+    },
+    debug: async (scenario, module, payload, options) => {
+      if (!bridge) throw absent();
+      return bridge.debug(scenario, module, payload, options);
+    },
     fights: async (replay, fights, options) => {
       if (!bridge) throw absent();
       return bridge.fights(replay, fights, options);
@@ -726,7 +854,8 @@ function activate(api) {
         noAnswer: t("The engine's page did not answer."),
         noFiles: t("This browser has no copy of StarCraft to play from. Give the site your game on the Game Data page."),
         replaced: t("Another replay was loaded in its place."),
-        closed: t("The game view was closed.")
+        closed: t("The game view was closed."),
+        noDebug: t("The game view cannot draw a debugged run yet. Reload the editor and try again.")
       });
       view.onKey(pressOnWindow);
       views.add(view);

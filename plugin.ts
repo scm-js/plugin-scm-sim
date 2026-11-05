@@ -38,6 +38,10 @@ export function activate(api: PluginApi): () => void {
     closed: t("The engine was closed before it finished."),
     noPathing: t("The engine's page cannot work out a map's pathing yet. Reload the editor and try again."),
     noMeasure: t("The engine's page cannot measure a map yet. Reload the editor and try again."),
+    noTests: t("The engine's page cannot run a script's tests in the game yet. Reload the editor and try again."),
+    noDebug: t("The engine's page cannot debug a test in the game yet. Reload the editor and try again."),
+    sessionOver: t("That debugging session is over."),
+    noCopies: t("A test of several players runs a copy of the game for each, which needs memory shared between them: this browser does not allow that on the engine's page (Chrome and Edge from version 137 do), or the page is from before it."),
     noFights: t("The engine's page cannot play a fight again yet. Reload the editor and try again."),
   });
   const tab = address && new PlayTab(address, {
@@ -66,7 +70,7 @@ export function activate(api: PluginApi): () => void {
   const views = new Set<ViewBridge>();
   const service: ScmSimService = {
     present: address !== null,
-    status: async () => bridge ? bridge.status() : { available: false, files: null, reason: absent().message, timeline: null, pathing: null, measure: null, fights: null },
+    status: async () => bridge ? bridge.status() : { available: false, files: null, reason: absent().message, timeline: null, pathing: null, measure: null, tests: null, copies: null, debug: null, fights: null },
     analyse: async (replay, options) => { if (!bridge) throw absent(); return bridge.analyse(replay, options); },
     play: async (map) => { await test(map); },
     pathing: async (scenario, options) => {
@@ -77,6 +81,9 @@ export function activate(api: PluginApi): () => void {
       if (!bridge) throw absent();
       return bridge.measure(scenario ?? await openScenario(), options);
     },
+    test: async (scenario, module, payload, options) => { if (!bridge) throw absent(); return bridge.test(scenario, module, payload, options); },
+    testCopies: async (scenario, module, payload, options) => { if (!bridge) throw absent(); return bridge.testCopies(scenario, module, payload, options); },
+    debug: async (scenario, module, payload, options) => { if (!bridge) throw absent(); return bridge.debug(scenario, module, payload, options); },
     fights: async (replay, fights, options) => { if (!bridge) throw absent(); return bridge.fights(replay, fights, options); },
     view: (element) => {
       if (!address) throw absent();
@@ -85,6 +92,7 @@ export function activate(api: PluginApi): () => void {
         noFiles: t("This browser has no copy of StarCraft to play from. Give the site your game on the Game Data page."),
         replaced: t("Another replay was loaded in its place."),
         closed: t("The game view was closed."),
+        noDebug: t("The game view cannot draw a debugged run yet. Reload the editor and try again."),
       });
       // The keys the view does not use are the editor's: pressed again on its window.
       view.onKey(pressOnWindow);

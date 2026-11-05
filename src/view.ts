@@ -7,11 +7,13 @@
  *   → `play {playing}`, `speed {multiplier}`, `seek {frame}`, `camera {x, y}`, `follow {track}`, `player {slot}`
  *   → `options {fog?, sound?, volume?, music?, duck?, remastered?, lighting?, console?}`   ← `looks {…}`
  *   ← `frame {frame, playing, seeking}`, `camera {x, y, width, height, byUser}`, `key {key, code, …}`
+ *   → `debug {map}` (a page whose `ready` says `debug`)          ← `debugged {map}` or `error {message}`
+ *   → `show {kept}`                                              ← `shown {frame}`, or `error {message}` (said to `onError`)
  *
  * One load at a time: a load asked for while another is on its way replaces it, and the first is rejected. Nothing
  * here touches the DOM directly: the frame is behind `ViewFrameHost`, so the conversation is tested without one.
  */
-import type { Disposable, ScmSimView, ViewCamera, ViewFrame, ViewHover, ViewHoverUnit, ViewKey, ViewLooks, ViewOptions, ViewPointer, ViewReady, ViewTrack, ViewUnits, ViewWheel, ViewedReplay } from "../contract";
+import type { Disposable, ScmSimPicture, ScmSimView, ViewCamera, ViewFrame, ViewHover, ViewHoverUnit, ViewKey, ViewLooks, ViewOptions, ViewPointer, ViewReady, ViewTrack, ViewUnits, ViewWheel, ViewedReplay } from "../contract";
 
 export interface HostedFrame {
   post(message: object): void;
@@ -26,6 +28,8 @@ export interface ViewWords {
   noFiles: string;
   replaced: string;
   closed: string;
+  /** The page is from before the debugger's pictures. */
+  noDebug: string;
 }
 
 type Listener<T> = (value: T) => void;
@@ -38,6 +42,11 @@ export class ViewBridge implements ScmSimView {
   private readonly frame: HostedFrame;
   private readonly words: ViewWords;
   private loading: { resolve(r: ViewedReplay): void; reject(e: Error): void } | null = null;
+  private debugging: { resolve(r: { map: { width: number; height: number } }): void; reject(e: Error): void } | null = null;
+  /** The page's `ready` said it draws a debugged run's pictures. */
+  private debugs = false;
+  private readonly errors = new Set<Listener<string>>();
+  private readonly shown = new Set<Listener<number>>();
   private readonly looksWaiting: ((l: ViewLooks) => void)[] = [];
   private readonly frames = new Set<Listener<ViewFrame>>();
   private readonly cameras = new Set<Listener<ViewCamera>>();
@@ -59,6 +68,7 @@ export class ViewBridge implements ScmSimView {
       switch (m.type) {
         case "scmjs.view.ready": {
           clearTimeout(timer);
+          this.debugs = typeof m.debug === "number";
           const f = files(m.files);
           answered({ files: f, reason: f ? null : typeof m.why === "string" && m.why ? m.why : words.noFiles });
           return;
@@ -77,11 +87,20 @@ export class ViewBridge implements ScmSimView {
           return;
         }
         case "scmjs.view.error": {
-          const l = this.loading;
-          this.loading = null;
-          l?.reject(new Error(String(m.message ?? "")));
+          const message = String(m.message ?? "");
+          const l = this.loading ?? this.debugging;
+          if (l === this.loading) this.loading = null; else this.debugging = null;
+          if (l) l.reject(new Error(message));
+          else for (const e of this.errors) e(message);
           return;
         }
+        case "scmjs.view.debugged": {
+          const d = this.debugging;
+          this.debugging = null;
+          d?.resolve({ map: { width: Number((m.map as { width?: unknown } | undefined)?.width) || 0, height: Number((m.map as { height?: unknown } | undefined)?.height) || 0 } });
+          return;
+        }
+        case "scmjs.view.shown": { const f = Number(m.frame) || 0; for (const l of this.shown) l(f); return; }
         case "scmjs.view.looks": { const l = looksOf(m); for (const w of this.looksWaiting.splice(0)) w(l); return; }
         case "scmjs.view.frame": { const f: ViewFrame = { frame: Number(m.frame) || 0, playing: m.playing === true, seeking: typeof m.seeking === "number" ? m.seeking : null }; for (const l of this.frames) l(f); return; }
         case "scmjs.view.camera": { const c: ViewCamera = { x: Number(m.x) || 0, y: Number(m.y) || 0, width: Number(m.width) || 0, height: Number(m.height) || 0, byUser: m.byUser === true }; for (const l of this.cameras) l(c); return; }
@@ -128,6 +147,30 @@ export class ViewBridge implements ScmSimView {
     });
   }
 
+  /**
+   * A debugged run's built map (TrigScript 4, A5), started as the engine's page started it for the record: the view
+   * then draws the run's pictures (`show`) and never plays. Rejects on a page from before it, or a copy of the game
+   * that may only watch.
+   */
+  async debug(map: Uint8Array): Promise<{ map: { width: number; height: number } }> {
+    const r = await this.ready;
+    if (this.closed) throw new Error(this.words.closed);
+    if (!r.files) throw new Error(r.reason ?? this.words.noFiles);
+    if (!this.debugs) throw new Error(this.words.noDebug);
+    this.loading?.reject(new Error(this.words.replaced));
+    this.loading = null;
+    this.debugging?.reject(new Error(this.words.replaced));
+    return new Promise((resolve, reject) => {
+      this.debugging = { resolve, reject };
+      this.frame.post({ type: "scmjs.view.debug", map: map.slice() });
+    });
+  }
+  /** Draws a picture of the debugged run (`ScmSimDebugSession.picture`); `onShown` hears when it is up. */
+  show(picture: ScmSimPicture): void { this.tell({ type: "scmjs.view.show", kept: picture.kept }); }
+  onShown(listener: Listener<number>): Disposable { return this.listen(this.shown, listener); }
+  /** What went wrong with no request waiting on it (a picture that could not be drawn). */
+  onError(listener: Listener<string>): Disposable { return this.listen(this.errors, listener); }
+
   private tell(message: object): void { if (!this.closed) this.frame.post(message); }
   play(playing: boolean): void { this.tell({ type: "scmjs.view.play", playing }); }
   speed(multiplier: number): void { this.tell({ type: "scmjs.view.speed", multiplier }); }
@@ -161,7 +204,10 @@ export class ViewBridge implements ScmSimView {
     this.closed = true;
     this.loading?.reject(new Error(this.words.closed));
     this.loading = null;
+    this.debugging?.reject(new Error(this.words.closed));
+    this.debugging = null;
     this.looksWaiting.length = 0;
+    this.errors.clear(); this.shown.clear();
     this.frames.clear(); this.cameras.clear(); this.keys.clear(); this.units.clear(); this.hovers.clear(); this.wheels.clear(); this.pointers.clear();
     this.frame.remove();
   }
