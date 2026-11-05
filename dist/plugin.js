@@ -507,6 +507,343 @@ function hoverOf(m) {
   return { unit, x: n(m.x, 0), y: n(m.y, 0) };
 }
 
+// src/debugModel.ts
+var STRIDE = 6;
+var RECORD = 2400;
+function records(pass) {
+  const r = pass.records, out = [];
+  for (let i = 0; i + STRIDE <= r.length; i += STRIDE) {
+    const slot = r[i + 2], action = slot >= 16;
+    out.push({ copy: r[i + 1], action, slot: action ? slot - 16 : slot, type: r[i + 3], answer: r[i + 4] });
+  }
+  return out;
+}
+function outcomes(pass, copies) {
+  const by = Array.from({ length: copies }, () => []);
+  for (const r of records(pass)) if (r.copy >= 0 && r.copy < copies) by[r.copy].push(r);
+  return by.map((rs, copy) => {
+    if (!rs.length) return { kind: pass.flags && pass.flags[copy] & 8 ? "done" : "idle" };
+    const conditions = rs.filter((r) => !r.action), actions = rs.filter((r) => r.action);
+    if (actions.length) {
+      const last = actions[actions.length - 1];
+      if (last.answer === 0) return { kind: "held", slot: last.slot, type: last.type, fired: conditions.length > 0 };
+      return { kind: conditions.length ? "fired" : "wenton" };
+    }
+    const failed = conditions.find((r) => r.answer === 0);
+    return failed ? { kind: "stopped", slot: failed.slot, type: failed.type } : { kind: "fired" };
+  });
+}
+function tally(list) {
+  const t = { fired: 0, held: 0, stopped: 0 };
+  for (const o of list) {
+    if (o.kind === "fired" || o.kind === "wenton") t.fired++;
+    else if (o.kind === "held") t.held++;
+    else if (o.kind === "stopped") t.stopped++;
+  }
+  return t;
+}
+var Passes = class {
+  byFrame = /* @__PURE__ */ new Map();
+  add(pass) {
+    this.byFrame.set(pass.frame, pass);
+  }
+  rewound(frame) {
+    for (const f of [...this.byFrame.keys()]) if (f > frame) this.byFrame.delete(f);
+  }
+  clear() {
+    this.byFrame.clear();
+  }
+  get(frame) {
+    return this.byFrame.get(frame) ?? null;
+  }
+  /** The frames passes ran in, in order. */
+  frames() {
+    return [...this.byFrame.keys()].sort((a, b) => a - b);
+  }
+};
+function trigRecords(chk) {
+  const view = new DataView(chk.buffer, chk.byteOffset, chk.byteLength), out = [];
+  for (let at = 0; at + 8 <= chk.length; ) {
+    const name = String.fromCharCode(chk[at], chk[at + 1], chk[at + 2], chk[at + 3]), size = view.getInt32(at + 4, true);
+    at += 8;
+    if (size < 0) continue;
+    const end = Math.min(chk.length, at + size);
+    if (name === "TRIG") for (let r = at; r + RECORD <= end; r += RECORD) out.push(chk.subarray(r, r + RECORD));
+    at = end;
+  }
+  return out;
+}
+function editorRows(built, editor) {
+  const same = (a, b) => {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+    return true;
+  };
+  let next = 0;
+  return built.map((b) => {
+    for (let j = next; j < editor.length; j++) if (same(b, editor[j])) {
+      next = j + 1;
+      return j;
+    }
+    return null;
+  });
+}
+
+// src/debug.ts
+var FPS = 1e3 / 42;
+var COLUMN = 5;
+function triggerDebugger(api, address, how, words) {
+  const t = api.i18n.t, w = api.ui.widgets;
+  let open = null;
+  let panel = null;
+  const run = () => {
+    if (open && panel?.isOpen()) {
+      open.start();
+      return;
+    }
+    panel = api.ui.panel({ title: t("Trigger Debugger"), dock: "bottom", height: 440, mount: (body) => mountDebugger(body), onClose: () => {
+      open = null;
+      panel = null;
+    } });
+  };
+  const mountDebugger = (body) => {
+    const root = document.createElement("div");
+    body.style.height = "100%";
+    root.style.cssText = "display:flex;gap:8px;height:100%;min-height:0;box-sizing:border-box;font:var(--fs-sm) var(--font-ui);color:var(--text)";
+    const frame = document.createElement("iframe");
+    frame.title = t("The game");
+    frame.style.cssText = "flex:3 1 0;min-width:320px;border:1px solid var(--border);background:#000";
+    const side = document.createElement("div");
+    side.style.cssText = "flex:2 1 0;min-width:300px;display:flex;flex-direction:column;gap:6px;min-height:0";
+    const bar = document.createElement("div");
+    bar.style.cssText = "display:flex;gap:4px;align-items:center;flex-wrap:wrap";
+    const where = document.createElement("span");
+    where.style.cssText = "margin-left:auto;color:var(--text-dim);font-family:var(--font-mono)";
+    const control = (action, frameTo) => (pinned = false, frame.contentWindow?.postMessage({ type: "scmjs.play.control", action, ...frameTo !== void 0 ? { frame: frameTo } : {} }, address.origin));
+    let paused = false;
+    const play = w.button(t("Pause"), { onClick: () => control(paused ? "resume" : "pause") });
+    const back = w.button(t("Previous Pass"), { ghost: true, onClick: () => {
+      const f = passes.frames().filter((x) => x < standing).pop();
+      control("seek", f ?? 0);
+    } });
+    const step = w.button(t("Step Frame"), { ghost: true, onClick: () => control("step") });
+    const next = w.button(t("Next Pass"), { ghost: true, onClick: () => control("pass") });
+    const again = w.button(t("Restart"), { ghost: true, onClick: () => start() });
+    bar.append(play, back, step, next, again, where);
+    const strip = document.createElement("div");
+    strip.style.cssText = "overflow-x:auto;overflow-y:hidden;border:1px solid var(--border);background:var(--bg-1);flex:none";
+    const canvas = document.createElement("canvas");
+    canvas.height = 64;
+    canvas.style.cssText = "display:block;cursor:pointer";
+    canvas.title = t("Each column is a pass of the triggers: green fired, amber held at an action, grey stopped at a condition. Click one to see it.");
+    strip.append(canvas);
+    const head = document.createElement("div");
+    head.style.cssText = "color:var(--text-dim)";
+    const list = document.createElement("div");
+    list.style.cssText = "flex:1;min-height:0;overflow:auto;border:1px solid var(--border);background:var(--bg-1)";
+    side.append(bar, strip, head, list);
+    root.append(frame, side);
+    body.append(root);
+    const passes = new Passes();
+    let copies = [];
+    let rows = [];
+    let names = [];
+    let standing = 0;
+    let selected = null;
+    let pinned = false;
+    let map = null;
+    let ready = false;
+    const hand = () => {
+      if (!map || !ready || !frame.contentWindow) return;
+      frame.contentWindow.postMessage({ type: "scmjs.play", map: map.bytes.slice(), name: map.name, ...how(), useMapSettings: true, debug: true }, address.origin);
+    };
+    const start = () => {
+      head.textContent = t("Building the map\u2026");
+      void (async () => {
+        try {
+          const file = await api.document.export({ format: "scx" });
+          const plain = await api.document.export({ format: "chk", built: false });
+          if (!file || !plain) {
+            head.textContent = words.noMap;
+            return;
+          }
+          const bytes = new Uint8Array(await file.arrayBuffer());
+          const built = trigRecords(await api.document.sections.chkOf(bytes));
+          rows = editorRows(built, trigRecords(new Uint8Array(await plain.arrayBuffer())));
+          const list2 = api.triggers.list();
+          names = rows.map((r) => {
+            if (r === null) return t("A trigger a build step added");
+            const comment = list2[r]?.actions.find((a) => a.type === 47 && a.text);
+            const text = comment ? api.names.string(comment.text) : null;
+            return text ? t("Trigger {n}: {comment}", { n: r + 1, comment: text }) : t("Trigger {n}", { n: r + 1 });
+          });
+          passes.clear();
+          copies = [];
+          selected = null;
+          pinned = false;
+          standing = 0;
+          map = { bytes, name: file.name };
+          head.textContent = t("Starting the game\u2026");
+          draw();
+          show();
+          if (!frame.src) frame.src = address.play;
+          else hand();
+        } catch (err) {
+          head.textContent = t("The map could not be built: {message}", { message: err instanceof Error ? err.message : String(err) });
+        }
+      })();
+    };
+    const heard = (e) => {
+      if (e.origin !== address.origin || e.source !== frame.contentWindow) return;
+      const m = e.data;
+      if (!m || typeof m.type !== "string") return;
+      switch (m.type) {
+        case "scmjs.play.ready":
+          ready = true;
+          hand();
+          return;
+        case "scmjs.play.started":
+          setTimeout(() => {
+            if (!copies.length && map) head.textContent = t("The play page did not send the map's triggers. It may be from before the trigger debugger: reload the editor and try again.");
+          }, 8e3);
+          return;
+        case "scmjs.play.error":
+          head.textContent = t("The play page could not start the map: {message}", { message: String(m.message ?? "") });
+          return;
+        case "scmjs.play.triggerCopies":
+          copies = Array.isArray(m.copies) ? m.copies.map(([player, place, row]) => ({ player, place, row })) : [];
+          head.textContent = t("{n, plural, one {# trigger copy} other {# trigger copies}} in the game. Waiting for the first pass\u2026", { n: copies.length });
+          return;
+        case "scmjs.play.triggers": {
+          const frameAt = Number(m.frame);
+          passes.add({ frame: frameAt, records: m.records instanceof Int32Array ? m.records : new Int32Array(0), flags: m.flags instanceof Uint8Array ? m.flags : null, action: m.action instanceof Uint8Array ? m.action : null });
+          if (!pinned || selected === null) selected = frameAt;
+          draw();
+          show();
+          return;
+        }
+        case "scmjs.play.rewound":
+          passes.rewound(Number(m.frame));
+          if (selected !== null && selected > Number(m.frame)) selected = passes.frames().pop() ?? null;
+          draw();
+          show();
+          return;
+        case "scmjs.play.frame": {
+          standing = Number(m.frame) || 0;
+          paused = m.paused === true;
+          play.textContent = paused ? t("Play") : t("Pause");
+          const s = Math.floor(standing / FPS);
+          where.textContent = t("Frame {frame} \xB7 {time}", { frame: standing, time: `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}` });
+          return;
+        }
+      }
+    };
+    window.addEventListener("message", heard);
+    const draw = () => {
+      const frames = passes.frames();
+      canvas.width = Math.max(strip.clientWidth || 300, frames.length * COLUMN);
+      const g = canvas.getContext("2d");
+      if (!g) return;
+      const css = getComputedStyle(root);
+      const colour = (name, fallback) => css.getPropertyValue(name).trim() || fallback;
+      g.clearRect(0, 0, canvas.width, canvas.height);
+      const most = Math.max(1, ...frames.map((f) => {
+        const k = tally(outcomes(passes.get(f), copies.length));
+        return k.fired + k.held + k.stopped;
+      }));
+      frames.forEach((f, i) => {
+        const k = tally(outcomes(passes.get(f), copies.length)), x = i * COLUMN;
+        let y = canvas.height;
+        for (const [n, c] of [[k.fired, colour("--ok", "#4c9a52")], [k.held, colour("--warn", "#c9962f")], [k.stopped, colour("--text-faint", "#777")]]) {
+          const h = Math.round(n / most * (canvas.height - 4));
+          g.fillStyle = c;
+          g.fillRect(x, y - h, COLUMN - 1, h);
+          y -= h;
+        }
+        if (f === selected) {
+          g.strokeStyle = colour("--gold", "#d4a64a");
+          g.strokeRect(x + 0.5, 0.5, COLUMN - 2, canvas.height - 1);
+        }
+      });
+      if (selected === frames[frames.length - 1]) strip.scrollLeft = strip.scrollWidth;
+    };
+    canvas.addEventListener("click", (e) => {
+      const i = Math.floor(e.offsetX / COLUMN), f = passes.frames()[i];
+      if (f === void 0) return;
+      selected = f;
+      pinned = true;
+      draw();
+      show();
+    });
+    const said = (o) => {
+      switch (o.kind) {
+        case "fired":
+          return t("fired");
+        case "wenton":
+          return t("went on and finished");
+        case "held":
+          return o.fired ? t("fired, held at action {n}: {action}", { n: o.slot + 1, action: api.names.action(o.type) }) : t("held at action {n}: {action}", { n: o.slot + 1, action: api.names.action(o.type) });
+        case "stopped":
+          return t("condition {n} did not hold: {condition}", { n: o.slot + 1, condition: api.names.condition(o.type) });
+        case "done":
+          return t("done");
+        case "idle":
+          return t("not asked");
+      }
+    };
+    const show = () => {
+      list.replaceChildren();
+      const pass = selected === null ? null : passes.get(selected);
+      if (!pass) {
+        if (copies.length) head.textContent = t("No pass yet.");
+        return;
+      }
+      const s = Math.floor(pass.frame / FPS);
+      const got = outcomes(pass, copies.length);
+      const k = tally(got);
+      head.textContent = t("The pass at frame {frame} ({time}): {fired} fired, {held} held, {stopped} stopped", { frame: pass.frame, time: `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`, fired: k.fired, held: k.held, stopped: k.stopped });
+      got.forEach((o, i) => {
+        if (o.kind === "idle" || o.kind === "done") return;
+        const c = copies[i], row = c ? rows[c.row] ?? null : null;
+        const line = document.createElement("div");
+        line.style.cssText = "display:flex;gap:8px;padding:2px 6px;border-bottom:1px solid var(--line-lo)" + (row !== null ? ";cursor:pointer" : "");
+        const who = document.createElement("span");
+        who.style.cssText = "color:var(--text-dim);flex:none;width:68px";
+        who.textContent = api.names.player(c?.player ?? 0);
+        const name = document.createElement("span");
+        name.style.cssText = "flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap";
+        name.textContent = c ? names[c.row] ?? t("Trigger {n}", { n: c.row + 1 }) : "?";
+        const what = document.createElement("span");
+        what.style.cssText = "flex:none;color:" + (o.kind === "stopped" ? "var(--text-faint)" : o.kind === "held" ? "var(--warn)" : "var(--ok)");
+        what.textContent = said(o);
+        line.append(who, name, what);
+        if (row !== null) {
+          line.title = t("Open it in the Trigger Editor");
+          line.addEventListener("click", () => api.view.goTo({ kind: "trigger", index: row }));
+        }
+        list.append(line);
+      });
+      if (!list.childElementCount) {
+        const none = document.createElement("div");
+        none.style.cssText = "padding:6px;color:var(--text-faint)";
+        none.textContent = t("Nothing ran in this pass.");
+        list.append(none);
+      }
+    };
+    open = { start };
+    start();
+    return () => {
+      window.removeEventListener("message", heard);
+      frame.src = "about:blank";
+      open = null;
+    };
+  };
+  return { run, dispose: () => {
+    panel?.close();
+    open = null;
+  } };
+}
+
 // src/settings.ts
 var DEFAULT_SETTINGS = { game: "map", race: 6, slot: -1, computers: 1, computerRace: 6 };
 var SETTINGS_KEY = "testMap";
@@ -771,7 +1108,37 @@ var KO = {
   "This browser": "\uC774 \uBE0C\uB77C\uC6B0\uC800",
   "Test in Browser": "\uBE0C\uB77C\uC6B0\uC800\uC5D0\uC11C \uD14C\uC2A4\uD2B8",
   "The map plays in a tab of the site's play page, from your copy of StarCraft. Nothing has to be written to disk.": "\uB9F5\uC740 \uC0AC\uC6A9\uC790\uC758 StarCraft \uBCF5\uC0AC\uBCF8\uC73C\uB85C \uC0AC\uC774\uD2B8 \uD50C\uB808\uC774 \uD398\uC774\uC9C0\uC758 \uD0ED\uC5D0\uC11C \uC2E4\uD589\uB429\uB2C8\uB2E4. \uB514\uC2A4\uD06C\uC5D0 \uC544\uBB34\uAC83\uB3C4 \uC4F8 \uD544\uC694\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4.",
-  "Tools \u25B8 Test in Browser plays the open map in a tab. How it plays it is set under Edit \u25B8 Preferences \u25B8 Testing, beside StarCraft.": "\uB3C4\uAD6C \u25B8 \uBE0C\uB77C\uC6B0\uC800\uC5D0\uC11C \uD14C\uC2A4\uD2B8\uB294 \uC5F4\uB9B0 \uB9F5\uC744 \uD0ED\uC5D0\uC11C \uC2E4\uD589\uD569\uB2C8\uB2E4. \uC2E4\uD589 \uBC29\uC2DD\uC740 \uD3B8\uC9D1 \u25B8 \uD658\uACBD \uC124\uC815 \u25B8 \uD14C\uC2A4\uD2B8\uC5D0\uC11C \uC2A4\uD0C0\uD06C\uB798\uD504\uD2B8 \uC606\uC5D0 \uC124\uC815\uD569\uB2C8\uB2E4."
+  "Tools \u25B8 Test in Browser plays the open map in a tab. How it plays it is set under Edit \u25B8 Preferences \u25B8 Testing, beside StarCraft.": "\uB3C4\uAD6C \u25B8 \uBE0C\uB77C\uC6B0\uC800\uC5D0\uC11C \uD14C\uC2A4\uD2B8\uB294 \uC5F4\uB9B0 \uB9F5\uC744 \uD0ED\uC5D0\uC11C \uC2E4\uD589\uD569\uB2C8\uB2E4. \uC2E4\uD589 \uBC29\uC2DD\uC740 \uD3B8\uC9D1 \u25B8 \uD658\uACBD \uC124\uC815 \u25B8 \uD14C\uC2A4\uD2B8\uC5D0\uC11C \uC2A4\uD0C0\uD06C\uB798\uD504\uD2B8 \uC606\uC5D0 \uC124\uC815\uD569\uB2C8\uB2E4.",
+  "Debug Triggers in Browser": "\uBE0C\uB77C\uC6B0\uC800\uC5D0\uC11C \uD2B8\uB9AC\uAC70 \uB514\uBC84\uADF8",
+  "Trigger Debugger": "\uD2B8\uB9AC\uAC70 \uB514\uBC84\uAC70",
+  "The game": "\uAC8C\uC784",
+  "Pause": "\uC77C\uC2DC \uC815\uC9C0",
+  "Previous Pass": "\uC774\uC804 \uC2E4\uD589",
+  "Step Frame": "\uD55C \uD504\uB808\uC784 \uC9C4\uD589",
+  "Next Pass": "\uB2E4\uC74C \uC2E4\uD589",
+  "Restart": "\uB2E4\uC2DC \uC2DC\uC791",
+  "Each column is a pass of the triggers: green fired, amber held at an action, grey stopped at a condition. Click one to see it.": "\uC5F4 \uD558\uB098\uAC00 \uD2B8\uB9AC\uAC70 \uC2E4\uD589 \uD55C \uBC88\uC785\uB2C8\uB2E4. \uCD08\uB85D\uC0C9\uC740 \uC2E4\uD589\uB428, \uC8FC\uD669\uC0C9\uC740 \uC561\uC158\uC5D0\uC11C \uBA48\uCDA4, \uD68C\uC0C9\uC740 \uC870\uAC74\uC5D0\uC11C \uBA48\uCDA4\uC785\uB2C8\uB2E4. \uC5F4\uC744 \uD074\uB9AD\uD558\uBA74 \uC790\uC138\uD788 \uBCFC \uC218 \uC788\uC2B5\uB2C8\uB2E4.",
+  "Building the map\u2026": "\uB9F5\uC744 \uBE4C\uB4DC\uD558\uB294 \uC911\u2026",
+  "A trigger a build step added": "\uBE4C\uB4DC \uB2E8\uACC4\uAC00 \uCD94\uAC00\uD55C \uD2B8\uB9AC\uAC70",
+  "Trigger {n}: {comment}": "\uD2B8\uB9AC\uAC70 {n}: {comment}",
+  "Trigger {n}": "\uD2B8\uB9AC\uAC70 {n}",
+  "Starting the game\u2026": "\uAC8C\uC784\uC744 \uC2DC\uC791\uD558\uB294 \uC911\u2026",
+  "The map could not be built: {message}": "\uB9F5\uC744 \uBE4C\uB4DC\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4: {message}",
+  "{n, plural, one {# trigger copy} other {# trigger copies}} in the game. Waiting for the first pass\u2026": "\uAC8C\uC784\uC5D0 \uD2B8\uB9AC\uAC70 \uC0AC\uBCF8\uC774 {n}\uAC1C \uC788\uC2B5\uB2C8\uB2E4. \uCCAB \uC2E4\uD589\uC744 \uAE30\uB2E4\uB9AC\uB294 \uC911\u2026",
+  "Play": "\uC7AC\uC0DD",
+  "Frame {frame} \xB7 {time}": "\uD504\uB808\uC784 {frame} \xB7 {time}",
+  "fired": "\uC2E4\uD589\uB428",
+  "went on and finished": "\uC774\uC5B4\uC11C \uC2E4\uD589\uD558\uACE0 \uB05D\uB0A8",
+  "fired, held at action {n}: {action}": "\uC2E4\uD589\uB428, \uC561\uC158 {n}\uC5D0\uC11C \uBA48\uCDA4: {action}",
+  "held at action {n}: {action}": "\uC561\uC158 {n}\uC5D0\uC11C \uBA48\uCDA4: {action}",
+  "condition {n} did not hold: {condition}": "\uC870\uAC74 {n}\uC774(\uAC00) \uB9DE\uC9C0 \uC54A\uC74C: {condition}",
+  "done": "\uB05D\uB0A8",
+  "not asked": "\uD655\uC778\uD558\uC9C0 \uC54A\uC74C",
+  "No pass yet.": "\uC544\uC9C1 \uC2E4\uD589\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.",
+  "The pass at frame {frame} ({time}): {fired} fired, {held} held, {stopped} stopped": "\uD504\uB808\uC784 {frame}({time})\uC758 \uC2E4\uD589: \uC2E4\uD589\uB428 {fired}, \uBA48\uCDA4 {held}, \uC870\uAC74\uC5D0\uC11C \uBA48\uCDA4 {stopped}",
+  "Open it in the Trigger Editor": "\uD2B8\uB9AC\uAC70 \uD3B8\uC9D1\uAE30\uC5D0\uC11C \uC5F4\uAE30",
+  "Nothing ran in this pass.": "\uC774 \uC2E4\uD589\uC5D0\uC11C\uB294 \uC544\uBB34\uAC83\uB3C4 \uC2E4\uD589\uB418\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4.",
+  "The play page did not send the map's triggers. It may be from before the trigger debugger: reload the editor and try again.": "\uD50C\uB808\uC774 \uD398\uC774\uC9C0\uAC00 \uB9F5\uC758 \uD2B8\uB9AC\uAC70\uB97C \uBCF4\uB0B4\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4. \uD2B8\uB9AC\uAC70 \uB514\uBC84\uAC70 \uC774\uC804\uC758 \uD398\uC774\uC9C0\uC77C \uC218 \uC788\uC2B5\uB2C8\uB2E4. \uD3B8\uC9D1\uAE30\uB97C \uC0C8\uB85C \uACE0\uCE5C \uB4A4 \uB2E4\uC2DC \uC2DC\uB3C4\uD558\uC138\uC694."
 };
 
 // plugin.ts
@@ -892,9 +1259,15 @@ function activate(api) {
     }),
     api.menu.add("Tools", { label: msg("Test Map in Browser"), icon: "plugin", after: "Test Map Settings\u2026", command: "play" })
   ];
+  const debugging = address ? triggerDebugger(api, address, () => playHow(settings()), { noMap: t("There is no map to play.") }) : null;
+  const debugMenu = !debugging ? [] : [
+    api.commands.register({ id: "debugTriggers", title: msg("Debug Triggers in Browser"), enabled: () => api.document.isOpen(), run: () => debugging.run() }),
+    api.menu.add("Tools", { label: msg("Debug Triggers in Browser"), icon: "plugin", command: "debugTriggers" })
+  ];
   return () => {
     for (const v of [...views]) v.dispose();
-    for (const m of menu) m.dispose();
+    for (const m of [...menu, ...debugMenu]) m.dispose();
+    debugging?.dispose();
     provided.dispose();
     page.dispose();
     bridge?.close();
