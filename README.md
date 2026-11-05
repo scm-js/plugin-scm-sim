@@ -4,8 +4,9 @@ A library plugin for [scmJS](https://github.com/scm-js/scm-js), the browser-base
 Brood War map editor. It connects the editor to scm-sim, the game engine behind the site's
 play page at [scmjs.dev/play](https://scmjs.dev/play/).
 
-It adds one way to test a map: **Test in Browser**, which plays the open map on the play page
-in a tab of its own. Everything else is for other plugins. They use it to:
+It adds two commands: **Test in Browser**, which plays the open map on the play page in a tab of
+its own, and **Debug Triggers in Browser**, which plays it under the map and shows what its
+triggers do. Everything else is for other plugins. They use it to:
 
 - play a replay to its end without showing it, and get back what happened in it;
 - start a map on the play page;
@@ -64,6 +65,29 @@ The [user guide](https://docs.scmjs.dev/guide/checking-testing-and-saving/#test-
 more on each setting. An editor from before 0.8.6 has no *Send the map to*: there the item is
 **Tools ▸ Test Map in Browser**, and its settings are under **Edit ▸ Preferences ▸ Plugins ▸
 scm-sim**.
+
+## Debug Triggers in Browser
+
+**Tools ▸ Debug Triggers in Browser** plays the open map, as Save would write it, in a panel
+under the map, always with Use Map Settings (a melee game runs the game's own melee triggers,
+not the map's). You play it there as on the play page. Beside the game:
+
+- **Pause** / **Play**, **Step Frame**, **Next Pass** (on to the next time the game runs the
+  triggers) and **Previous Pass** (back to the one before). Going back replays your own orders,
+  so stepping forward again comes to the same game; giving a new order after going back plays
+  on from there instead.
+- A timeline with a column for each pass of the triggers: how many fired (green), were held at
+  an action such as a Wait (amber), or stopped at a condition (grey). Click a column to see that
+  pass.
+- The triggers of the selected pass, each with what happened to it: fired, held at action 2
+  (Wait), condition 3 did not hold (Bring), went on from an earlier pass and finished. The game
+  stops asking a trigger's conditions at the first that does not hold, so that is the one named.
+  Click one to open it in the Trigger Editor. Triggers a build step added, such as a TrigScript
+  program's, are listed but have no row of their own to open.
+
+Run the command again to rebuild the map and start over in the same panel. It needs a play page
+from the same release or later; an older one plays the map and sends nothing back, and the
+panel says so.
 
 ## Use it from a plugin
 

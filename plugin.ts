@@ -15,6 +15,7 @@ import type { ScmSimService } from "./contract";
 import { simAddress } from "./src/address";
 import { Bridge, domFrames } from "./src/bridge";
 import { domViewFrames, pressOnWindow, ViewBridge } from "./src/view";
+import { triggerDebugger } from "./src/debug";
 import { registerPreferencesPage, testSettingsForm } from "./src/page";
 import { PlayTab } from "./src/play";
 import { playHow, readSettings, SETTINGS_KEY } from "./src/settings";
@@ -128,5 +129,11 @@ export function activate(api: PluginApi): () => void {
     }),
     api.menu.add("Tools", { label: msg("Test Map in Browser"), icon: "plugin", after: "Test Map Settings…", command: "play" }),
   ];
-  return () => { for (const v of [...views]) v.dispose(); for (const m of menu) m.dispose(); provided.dispose(); page.dispose(); bridge?.close(); tab?.dispose(); catalogue.dispose(); };
+  // Tools ▸ Debug Triggers in Browser: the map played in a panel under it, with what its triggers do pass by pass.
+  const debugging = address ? triggerDebugger(api, address, () => playHow(settings()), { noMap: t("There is no map to play.") }) : null;
+  const debugMenu = !debugging ? [] : [
+    api.commands.register({ id: "debugTriggers", title: msg("Debug Triggers in Browser"), enabled: () => api.document.isOpen(), run: () => debugging.run() }),
+    api.menu.add("Tools", { label: msg("Debug Triggers in Browser"), icon: "plugin", command: "debugTriggers" }),
+  ];
+  return () => { for (const v of [...views]) v.dispose(); for (const m of [...menu, ...debugMenu]) m.dispose(); debugging?.dispose(); provided.dispose(); page.dispose(); bridge?.close(); tab?.dispose(); catalogue.dispose(); };
 }
