@@ -74,6 +74,7 @@ export function activate(api: PluginApi): () => void {
     status: async () => bridge ? bridge.status() : { available: false, files: null, reason: absent().message, timeline: null, pathing: null, measure: null, tests: null, copies: null, debug: null, fights: null },
     analyse: async (replay, options) => { if (!bridge) throw absent(); return bridge.analyse(replay, options); },
     play: async (map) => { await test(map); },
+    playReplay: async (replay, at) => { if (!tab) throw absent(); await tab.playReplay(replay, at); },
     pathing: async (scenario, options) => {
       if (!bridge) throw absent();
       return bridge.pathing(scenario ?? await openScenario(), options);
