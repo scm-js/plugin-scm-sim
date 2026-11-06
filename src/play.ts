@@ -7,6 +7,11 @@
  *                                                         a whole .scm / .scx file, and how to play it (`src/settings.ts`)
  *   ← `{ type: "scmjs.play.started" }` / `{ type: "scmjs.play.shown" }` (on the setup screen) / `{ type: "scmjs.play.error", message }`
  *
+ * A replay goes the same way (the replay plugin's Play From Here; a play page from before says "No map came with the
+ * request."):
+ *   → `{ type: "scmjs.play", replay, name, frame, player? }`  watched from `frame`, through `player`'s eyes, the page's
+ *                                                         Watch Replay menu open to play on from there
+ *
  * "Ready" comes again when the play page starts over (a first visit takes the game's
  * files and reloads), and the map is handed over again each time, for as long as that
  * tab is open. Playing again sends the new map to the same tab. A play page from before the
@@ -25,7 +30,8 @@ export interface PlayWords { blocked: string; noMap: string; replaced: string }
 
 export class PlayTab {
   private tab: Window | null = null;
-  private map: { bytes: Uint8Array; name: string; how: PlayHow } | null = null;
+  /** What the tab is handed each time it says ready: a map and how to play it, or a replay and where to stand in it. */
+  private handing: { bytes: Uint8Array; name: string; how: PlayHow } | { replay: Uint8Array; name: string; frame: number; player?: number } | null = null;
   private ready = false;
   private waiting: { resolve(outcome: PlayOutcome): void; reject(e: Error): void } | null = null;
   private readonly address: SimAddress;
@@ -45,24 +51,45 @@ export class PlayTab {
   }
 
   private hand() {
-    if (!this.tab || this.tab.closed || !this.map || !this.ready) return;
+    const h = this.handing;
+    if (!this.tab || this.tab.closed || !h || !this.ready) return;
     // (A copy: the bytes stay here for the next time the tab asks.)
-    this.tab.postMessage({ type: "scmjs.play", map: this.map.bytes.slice(), name: this.map.name, ...this.map.how }, this.address.origin);
+    if ("replay" in h) this.tab.postMessage({ type: "scmjs.play", replay: h.replay.slice(), name: h.name, frame: h.frame, ...(h.player !== undefined ? { player: h.player } : {}) }, this.address.origin);
+    else this.tab.postMessage({ type: "scmjs.play", map: h.bytes.slice(), name: h.name, ...h.how }, this.address.origin);
   }
 
-  /** `map`: the bytes, or a promise of them (the tab is opened before anything is awaited: a browser lets a click open a tab, not what follows it later). */
-  async play(map: { bytes: Uint8Array; name: string } | Promise<{ bytes: Uint8Array; name: string } | null>, how: PlayHow): Promise<PlayOutcome> {
+  /** Opens the tab (now: from the click) or brings it forward; false when the browser would not open one. */
+  private open(): boolean {
     const reuse = this.tab !== null && !this.tab.closed;
     if (!reuse) { this.ready = false; this.tab = window.open(this.address.play, TAB); }
-    if (!this.tab) throw new Error(this.words.blocked);
-    const got = await map;
-    if (!got) throw new Error(this.words.noMap);
-    this.map = { bytes: got.bytes, name: got.name, how };
-    if (reuse) this.tab.focus();
+    else this.tab!.focus();
+    return this.tab !== null;
+  }
+
+  private handOver(): Promise<PlayOutcome> {
     this.waiting?.reject(new Error(this.words.replaced));
     const started = new Promise<PlayOutcome>((resolve, reject) => { this.waiting = { resolve, reject }; });
     this.hand();
     return started;
+  }
+
+  /** `map`: the bytes, or a promise of them (the tab is opened before anything is awaited: a browser lets a click open a tab, not what follows it later). */
+  async play(map: { bytes: Uint8Array; name: string } | Promise<{ bytes: Uint8Array; name: string } | null>, how: PlayHow): Promise<PlayOutcome> {
+    if (!this.open()) throw new Error(this.words.blocked);
+    const got = await map;
+    if (!got) throw new Error(this.words.noMap);
+    this.handing = { bytes: got.bytes, name: got.name, how };
+    return this.handOver();
+  }
+
+  /**
+   * A replay watched on the play page from `frame`, through `player`'s eyes (a replay player's slot), with its Watch
+   * Replay menu open to play on from there. Call it from a click: the tab is opened first.
+   */
+  async playReplay(replay: { bytes: Uint8Array; name: string }, at: { frame: number; player?: number }): Promise<PlayOutcome> {
+    if (!this.open()) throw new Error(this.words.blocked);
+    this.handing = { replay: replay.bytes, name: replay.name, frame: Math.max(0, Math.floor(at.frame)), ...(at.player !== undefined ? { player: at.player } : {}) };
+    return this.handOver();
   }
 
   dispose() { window.removeEventListener("message", this.heard); this.waiting = null; }

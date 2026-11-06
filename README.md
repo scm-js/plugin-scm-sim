@@ -161,6 +161,17 @@ screen. Otherwise it resolves when the game is on the page.
 
 Call it from the click that asks for it, because a browser only lets a click open a tab.
 
+### `playReplay(replay, at)`
+
+Opens a replay on the play page, in the same tab as `play`, at frame `at.frame` and through
+the eyes of `at.player` (a replay player's slot). The page pauses there with its Watch Replay
+menu open, so the person can play on from that moment: alone, against a community bot, or
+with others. `replay` is a whole `.rep` file. It resolves when the replay is on the page.
+Added in 0.15.0, so check that it is there before offering it. A play page from before it
+answers "No map came with the request."
+
+Call it from the click that asks for it.
+
 ### `pathing(scenario?, options?)`
 
 Since 0.7.0. Check that `pathing` exists and that `status().pathing` is a number (it is null
