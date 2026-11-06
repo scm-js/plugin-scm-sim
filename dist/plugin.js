@@ -996,7 +996,8 @@ function registerPreferencesPage(api, service, form) {
 var TAB = "scmjs-play";
 var PlayTab = class {
   tab = null;
-  map = null;
+  /** What the tab is handed each time it says ready: a map and how to play it, or a replay and where to stand in it. */
+  handing = null;
   ready = false;
   waiting = null;
   address;
@@ -1022,27 +1023,44 @@ var PlayTab = class {
     window.addEventListener("message", this.heard);
   }
   hand() {
-    if (!this.tab || this.tab.closed || !this.map || !this.ready) return;
-    this.tab.postMessage({ type: "scmjs.play", map: this.map.bytes.slice(), name: this.map.name, ...this.map.how }, this.address.origin);
+    const h = this.handing;
+    if (!this.tab || this.tab.closed || !h || !this.ready) return;
+    if ("replay" in h) this.tab.postMessage({ type: "scmjs.play", replay: h.replay.slice(), name: h.name, frame: h.frame, ...h.player !== void 0 ? { player: h.player } : {} }, this.address.origin);
+    else this.tab.postMessage({ type: "scmjs.play", map: h.bytes.slice(), name: h.name, ...h.how }, this.address.origin);
   }
-  /** `map`: the bytes, or a promise of them (the tab is opened before anything is awaited: a browser lets a click open a tab, not what follows it later). */
-  async play(map, how) {
+  /** Opens the tab (now: from the click) or brings it forward; false when the browser would not open one. */
+  open() {
     const reuse = this.tab !== null && !this.tab.closed;
     if (!reuse) {
       this.ready = false;
       this.tab = window.open(this.address.play, TAB);
-    }
-    if (!this.tab) throw new Error(this.words.blocked);
-    const got = await map;
-    if (!got) throw new Error(this.words.noMap);
-    this.map = { bytes: got.bytes, name: got.name, how };
-    if (reuse) this.tab.focus();
+    } else this.tab.focus();
+    return this.tab !== null;
+  }
+  handOver() {
     this.waiting?.reject(new Error(this.words.replaced));
     const started = new Promise((resolve, reject) => {
       this.waiting = { resolve, reject };
     });
     this.hand();
     return started;
+  }
+  /** `map`: the bytes, or a promise of them (the tab is opened before anything is awaited: a browser lets a click open a tab, not what follows it later). */
+  async play(map, how) {
+    if (!this.open()) throw new Error(this.words.blocked);
+    const got = await map;
+    if (!got) throw new Error(this.words.noMap);
+    this.handing = { bytes: got.bytes, name: got.name, how };
+    return this.handOver();
+  }
+  /**
+   * A replay watched on the play page from `frame`, through `player`'s eyes (a replay player's slot), with its Watch
+   * Replay menu open to play on from there. Call it from a click: the tab is opened first.
+   */
+  async playReplay(replay, at) {
+    if (!this.open()) throw new Error(this.words.blocked);
+    this.handing = { replay: replay.bytes, name: replay.name, frame: Math.max(0, Math.floor(at.frame)), ...at.player !== void 0 ? { player: at.player } : {} };
+    return this.handOver();
   }
   dispose() {
     window.removeEventListener("message", this.heard);
@@ -1190,6 +1208,10 @@ function activate(api) {
     },
     play: async (map) => {
       await test(map);
+    },
+    playReplay: async (replay, at) => {
+      if (!tab) throw absent();
+      await tab.playReplay(replay, at);
     },
     pathing: async (scenario, options) => {
       if (!bridge) throw absent();
