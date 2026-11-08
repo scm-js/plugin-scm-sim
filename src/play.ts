@@ -3,8 +3,11 @@
  * tab of its own:
  *
  *   ← `{ type: "scmjs.play.ready" }`                       the play page, each time it loads
- *   → `{ type: "scmjs.play", map, name, useMapSettings, race, slot?, computers, setup }`
- *                                                         a whole .scm / .scx file, and how to play it (`src/settings.ts`)
+ *   → `{ type: "scmjs.play", map, name, useMapSettings, race, slot?, computers, setup, dataSet? }`
+ *                                                         a whole .scm / .scx file, and how to play it (`src/settings.ts`);
+ *                                                         `dataSet` `{ id, name, hash }` when the editor makes the map
+ *                                                         with a data set other than the game's own (its Test Map hands
+ *                                                         it over), for the page to play it with those files
  *   ← `{ type: "scmjs.play.started" }` / `{ type: "scmjs.play.shown" }` (on the setup screen) / `{ type: "scmjs.play.error", message }`
  *
  * A replay goes the same way (the replay plugin's Play From Here; a play page from before says "No map came with the
@@ -26,12 +29,18 @@ const TAB = "scmjs-play";
 /** `started`: the game is on the page; `shown`: the map is on its setup screen. */
 export type PlayOutcome = "started" | "shown";
 
+/** The data set a map was made with (the editor's `TestMapFile.dataSet`): the files the page should play it with. */
+export interface PlayDataSet { id: string; name: string; hash: string }
+
+/** A map to play, as the editor's Test Map hands it over. */
+export interface PlayMap { bytes: Uint8Array; name: string; dataSet?: PlayDataSet }
+
 export interface PlayWords { blocked: string; noMap: string; replaced: string }
 
 export class PlayTab {
   private tab: Window | null = null;
   /** What the tab is handed each time it says ready: a map and how to play it, or a replay and where to stand in it. */
-  private handing: { bytes: Uint8Array; name: string; how: PlayHow } | { replay: Uint8Array; name: string; frame: number; player?: number } | null = null;
+  private handing: { bytes: Uint8Array; name: string; how: PlayHow; dataSet?: PlayDataSet } | { replay: Uint8Array; name: string; frame: number; player?: number } | null = null;
   private ready = false;
   private waiting: { resolve(outcome: PlayOutcome): void; reject(e: Error): void } | null = null;
   private readonly address: SimAddress;
@@ -55,7 +64,7 @@ export class PlayTab {
     if (!this.tab || this.tab.closed || !h || !this.ready) return;
     // (A copy: the bytes stay here for the next time the tab asks.)
     if ("replay" in h) this.tab.postMessage({ type: "scmjs.play", replay: h.replay.slice(), name: h.name, frame: h.frame, ...(h.player !== undefined ? { player: h.player } : {}) }, this.address.origin);
-    else this.tab.postMessage({ type: "scmjs.play", map: h.bytes.slice(), name: h.name, ...h.how }, this.address.origin);
+    else this.tab.postMessage({ type: "scmjs.play", map: h.bytes.slice(), name: h.name, ...h.how, ...(h.dataSet ? { dataSet: { ...h.dataSet } } : {}) }, this.address.origin);
   }
 
   /** Opens the tab (now: from the click) or brings it forward; false when the browser would not open one. */
@@ -74,11 +83,12 @@ export class PlayTab {
   }
 
   /** `map`: the bytes, or a promise of them (the tab is opened before anything is awaited: a browser lets a click open a tab, not what follows it later). */
-  async play(map: { bytes: Uint8Array; name: string } | Promise<{ bytes: Uint8Array; name: string } | null>, how: PlayHow): Promise<PlayOutcome> {
+  async play(map: PlayMap | Promise<PlayMap | null>, how: PlayHow): Promise<PlayOutcome> {
     if (!this.open()) throw new Error(this.words.blocked);
     const got = await map;
     if (!got) throw new Error(this.words.noMap);
-    this.handing = { bytes: got.bytes, name: got.name, how };
+    const dataSet = validDataSet(got.dataSet);
+    this.handing = { bytes: got.bytes, name: got.name, how, ...(dataSet ? { dataSet } : {}) };
     return this.handOver();
   }
 
@@ -93,4 +103,12 @@ export class PlayTab {
   }
 
   dispose() { window.removeEventListener("message", this.heard); this.waiting = null; }
+}
+
+/** The data set as the page is told it: the three fields as strings, or nothing (an editor from before it, or the game's own data). */
+export function validDataSet(set: unknown): PlayDataSet | null {
+  if (!set || typeof set !== "object") return null;
+  const { id, name, hash } = set as Record<string, unknown>;
+  if (typeof id !== "string" || !id) return null;
+  return { id, name: typeof name === "string" && name ? name : id, hash: typeof hash === "string" ? hash : "" };
 }

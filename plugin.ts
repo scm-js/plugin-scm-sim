@@ -52,11 +52,18 @@ export function activate(api: PluginApi): () => void {
   });
 
   const settings = () => readSettings(api.storage.get<unknown>(SETTINGS_KEY, null));
+  /** The data set the open map is made with, as Test Map hands it over, for a test asked for through the service. */
+  const openDataSet = () => {
+    const profile = api.gameData.profile();
+    if (profile.id === "starcraft") return {};
+    const hash = (api.gameData.source() as { hash?: string } | null)?.hash ?? "";
+    return { dataSet: { id: profile.id, name: profile.name, hash } };
+  };
   /** The map (left out: the open one, as Save would write it) played as the Preferences page says. */
   const test = (map?: { bytes: Uint8Array; name: string }) => {
     if (!tab) throw absent();
     // Not awaited before the tab is opened: `play` opens it first.
-    const open = async () => { const file = await api.document.export({ format: "scx" }); return file ? { bytes: new Uint8Array(await file.arrayBuffer()), name: file.name } : null; };
+    const open = async () => { const file = await api.document.export({ format: "scx" }); return file ? { bytes: new Uint8Array(await file.arrayBuffer()), name: file.name, ...openDataSet() } : null; };
     return tab.play(map ?? open(), playHow(settings()));
   };
 
