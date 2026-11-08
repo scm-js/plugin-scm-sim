@@ -992,6 +992,111 @@ function registerPreferencesPage(api, service, form) {
   });
 }
 
+// src/live.ts
+var WAIT = { patch: 2e4, state: 2e3, grafts: 1e4 };
+var items = (v) => Array.isArray(v) ? v.filter((x) => x && typeof x === "object" && typeof x.message === "string") : [];
+function readAnswer(m) {
+  return { applied: items(m.applied), deferred: items(m.deferred), errors: items(m.errors), ...typeof m.frame === "number" ? { frame: m.frame } : {} };
+}
+function readState(m) {
+  if (typeof m.running !== "boolean") return null;
+  const mod = m.mod;
+  return {
+    running: m.running,
+    alone: m.alone === true,
+    frame: typeof m.frame === "number" ? m.frame : 0,
+    mod: mod && typeof mod.hash === "string" ? { hash: mod.hash, name: typeof mod.name === "string" ? mod.name : mod.hash } : null,
+    waiting: Array.isArray(m.waiting) ? m.waiting.filter((w) => typeof w === "string") : []
+  };
+}
+function fileOf(f) {
+  return new File([f.bytes], f.path.split(/[\\/]/).pop() || "file");
+}
+var LiveLink = class {
+  post;
+  words;
+  waiting = /* @__PURE__ */ new Map();
+  listeners = /* @__PURE__ */ new Set();
+  next = 1;
+  /** What the page last said of its game, unasked or asked; null before it said anything, or once the tab closed. */
+  last = null;
+  constructor(post, words) {
+    this.post = post;
+    this.words = words;
+  }
+  /** A message from the tab (the caller checked it is the tab and the right origin). True when it was one of these. */
+  heard(m) {
+    const type = m.type;
+    if (type !== "scmjs.play.patched" && type !== "scmjs.play.state" && type !== "scmjs.play.grafts") return false;
+    if (type === "scmjs.play.state") {
+      const s = readState(m);
+      if (s) this.tell(s);
+    }
+    const id = typeof m.id === "string" ? m.id : null, w = id ? this.waiting.get(id) : void 0;
+    if (w && w.type === type) {
+      this.waiting.delete(id);
+      clearTimeout(w.timer);
+      w.resolve(m);
+    }
+    return true;
+  }
+  /** The tab closed or loaded again: nothing it was asked will be answered. */
+  gone() {
+    for (const [id, w] of this.waiting) {
+      clearTimeout(w.timer);
+      w.reject(new Error(this.words.noAnswer));
+      this.waiting.delete(id);
+    }
+    this.tell(null);
+  }
+  tell(state) {
+    this.last = state;
+    for (const l of this.listeners) l(state);
+  }
+  onState(listener) {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+  ask(type, message, wait) {
+    const id = `live-${this.next++}`;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        if (this.waiting.delete(id)) reject(new Error(this.words.noAnswer));
+      }, wait);
+      this.waiting.set(id, { type, resolve, reject, timer });
+      if (!this.post({ ...message, id })) {
+        clearTimeout(timer);
+        this.waiting.delete(id);
+        reject(new Error(this.words.noTab));
+      }
+    });
+  }
+  /** What the page says of the game in front now; null when no tab is open or it does not answer. */
+  async state() {
+    try {
+      return readState(await this.ask("scmjs.play.state", { type: "scmjs.play.ask", what: "state" }, WAIT.state));
+    } catch {
+      return null;
+    }
+  }
+  /** Whether a game played alone is running in the tab: the only game a patch is taken by. */
+  async playing() {
+    return (await this.state())?.alone === true;
+  }
+  /** Fields and files sent to the running game; the page's answer, item by item. */
+  async patch(fields, files2 = []) {
+    const m = await this.ask("scmjs.play.patched", { type: "scmjs.play.patch", fields: fields.map((f) => ({ ...f })), files: files2.map((f) => ({ path: f.path, file: fileOf(f) })) }, WAIT.patch);
+    return readAnswer(m);
+  }
+  /** The running game's button sets and requirement lists as `.graft` files (what a mod without its own starts from). */
+  async grafts() {
+    const m = await this.ask("scmjs.play.grafts", { type: "scmjs.play.ask", what: "grafts" }, WAIT.grafts);
+    if (typeof m.error === "string") throw new Error(m.error);
+    const files2 = Array.isArray(m.files) ? m.files.filter((f) => typeof f.path === "string" && f.bytes instanceof Uint8Array).map((f) => ({ path: f.path, bytes: f.bytes })) : [];
+    return { files: files2, left: Array.isArray(m.left) ? m.left.filter((x) => typeof x === "string") : [] };
+  }
+};
+
 // src/play.ts
 var TAB = "scmjs-play";
 var PlayTab = class {
@@ -1006,7 +1111,9 @@ var PlayTab = class {
     if (e.origin !== this.address.origin || !this.tab || e.source !== this.tab) return;
     const m = e.data;
     if (!m || typeof m.type !== "string") return;
+    if (this.live.heard(m)) return;
     if (m.type === "scmjs.play.ready") {
+      this.live.gone();
       this.ready = true;
       this.hand();
     } else if (m.type === "scmjs.play.started" || m.type === "scmjs.play.shown") {
@@ -1017,16 +1124,30 @@ var PlayTab = class {
       this.waiting = null;
     }
   };
+  /** Live edit with the game in the tab (`src/live.ts`). */
+  live;
   constructor(address, words) {
     this.address = address;
     this.words = words;
+    this.live = new LiveLink((message) => {
+      if (!this.tab || this.tab.closed || !this.ready) return false;
+      this.tab.postMessage(message, this.address.origin);
+      return true;
+    }, { noTab: words.noTab ?? "No play page is open.", noAnswer: words.noAnswer ?? "The play page did not answer." });
     window.addEventListener("message", this.heard);
+  }
+  /** Whether the play page's tab is open and has said it is ready. */
+  isOpen() {
+    return !!this.tab && !this.tab.closed && this.ready;
   }
   hand() {
     const h = this.handing;
     if (!this.tab || this.tab.closed || !h || !this.ready) return;
     if ("replay" in h) this.tab.postMessage({ type: "scmjs.play", replay: h.replay.slice(), name: h.name, frame: h.frame, ...h.player !== void 0 ? { player: h.player } : {} }, this.address.origin);
-    else this.tab.postMessage({ type: "scmjs.play", map: h.bytes.slice(), name: h.name, ...h.how }, this.address.origin);
+    else {
+      const d = h.dataSet, dataSet = d ? { ...d, ...d.files ? { files: d.files.map((f) => ({ path: f.path.toLowerCase().replace(/\\/g, "/"), file: new File([f.bytes], f.path.split(/[\\/]/).pop() || "file") })) } : {} } : null;
+      this.tab.postMessage({ type: "scmjs.play", ...h.bytes ? { map: h.bytes.slice() } : {}, name: h.name, ...h.how, ...dataSet ? { dataSet } : {} }, this.address.origin);
+    }
   }
   /** Opens the tab (now: from the click) or brings it forward; false when the browser would not open one. */
   open() {
@@ -1050,7 +1171,19 @@ var PlayTab = class {
     if (!this.open()) throw new Error(this.words.blocked);
     const got = await map;
     if (!got) throw new Error(this.words.noMap);
-    this.handing = { bytes: got.bytes, name: got.name, how };
+    const dataSet = validDataSet(got.dataSet);
+    this.handing = { bytes: got.bytes, name: got.name, how, ...dataSet ? { dataSet } : {} };
+    return this.handOver();
+  }
+  /**
+   * A mod and a map (or the mod alone: the page keeps it and shows its Mods dialog) handed to the tab: the page keeps
+   * the files as a dropped mod, loads again on it and is handed the map again (`scmjs.play.ready`). The Mod Editor's
+   * test game. Call it from a click: the tab is opened first.
+   */
+  async playMod(test, how) {
+    if (!this.open()) throw new Error(this.words.blocked);
+    const { map, mod, useMapSettings } = await test;
+    this.handing = { bytes: map?.bytes ?? null, name: map?.name ?? mod.name, how: useMapSettings === void 0 ? how : { ...how, useMapSettings }, dataSet: { id: mod.name, name: mod.name, hash: mod.hash, files: mod.files } };
     return this.handOver();
   }
   /**
@@ -1065,8 +1198,15 @@ var PlayTab = class {
   dispose() {
     window.removeEventListener("message", this.heard);
     this.waiting = null;
+    this.live.gone();
   }
 };
+function validDataSet(set) {
+  if (!set || typeof set !== "object") return null;
+  const { id, name, hash } = set;
+  if (typeof id !== "string" || !id) return null;
+  return { id, name: typeof name === "string" && name ? name : id, hash: typeof hash === "string" ? hash : "" };
+}
 
 // src/target.ts
 function testTargetCall(api) {
@@ -1077,6 +1217,8 @@ function testTargetCall(api) {
 // ko.ts
 var KO = {
   "Another map was started in its place.": "\uADF8 \uC790\uB9AC\uC5D0 \uB2E4\uB978 \uB9F5\uC774 \uC2DC\uC791\uB418\uC5C8\uC2B5\uB2C8\uB2E4.",
+  "No play page is open: start a test game first.": "\uC5F4\uB9B0 \uD50C\uB808\uC774 \uD398\uC774\uC9C0\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4. \uBA3C\uC800 \uD14C\uC2A4\uD2B8 \uAC8C\uC784\uC744 \uC2DC\uC791\uD558\uC138\uC694.",
+  "The play page did not answer. Reload it, or start the test game again.": "\uD50C\uB808\uC774 \uD398\uC774\uC9C0\uAC00 \uC751\uB2F5\uD558\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4. \uD398\uC774\uC9C0\uB97C \uC0C8\uB85C \uACE0\uCE58\uAC70\uB098 \uD14C\uC2A4\uD2B8 \uAC8C\uC784\uC744 \uB2E4\uC2DC \uC2DC\uC791\uD558\uC138\uC694.",
   "Asking the engine\u2026": "\uC5D4\uC9C4\uC5D0 \uD655\uC778\uD558\uB294 \uC911\u2026",
   "Check again": "\uB2E4\uC2DC \uD655\uC778",
   "Choose on the play page": "\uD50C\uB808\uC774 \uD398\uC774\uC9C0\uC5D0\uC11C \uACE0\uB974\uAE30",
@@ -1162,6 +1304,7 @@ var KO = {
 // plugin.ts
 var msg = (text) => text;
 var SERVICE_VERSION = 1;
+var LIVE_VERSION = 1;
 function activate(api) {
   const catalogue = api.i18n.register({ ko: KO });
   const t = api.i18n.t;
@@ -1182,14 +1325,22 @@ function activate(api) {
   const tab = address && new PlayTab(address, {
     blocked: t("The browser did not let the play page open. Allow pop-ups for this site and try again."),
     noMap: t("There is no map to play."),
-    replaced: t("Another map was started in its place.")
+    replaced: t("Another map was started in its place."),
+    noTab: t("No play page is open: start a test game first."),
+    noAnswer: t("The play page did not answer. Reload it, or start the test game again.")
   });
   const settings = () => readSettings(api.storage.get(SETTINGS_KEY, null));
+  const openDataSet = () => {
+    const profile = api.gameData.profile();
+    if (profile.id === "starcraft") return {};
+    const hash = api.gameData.source()?.hash ?? "";
+    return { dataSet: { id: profile.id, name: profile.name, hash } };
+  };
   const test = (map) => {
     if (!tab) throw absent();
     const open = async () => {
       const file = await api.document.export({ format: "scx" });
-      return file ? { bytes: new Uint8Array(await file.arrayBuffer()), name: file.name } : null;
+      return file ? { bytes: new Uint8Array(await file.arrayBuffer()), name: file.name, ...openDataSet() } : null;
     };
     return tab.play(map ?? open(), playHow(settings()));
   };
@@ -1257,6 +1408,26 @@ function activate(api) {
     }
   };
   const provided = api.services.provide("engine", service, { version: SERVICE_VERSION });
+  const liveService = {
+    present: address !== null,
+    playing: async () => tab?.isOpen() ? tab.live.playing() : false,
+    state: async () => tab?.isOpen() ? tab.live.state() : null,
+    onState: (listener) => tab ? tab.live.onState(listener) : () => {
+    },
+    patch: async (fields, files2 = []) => {
+      if (!tab) throw absent();
+      return tab.live.patch(fields, files2);
+    },
+    grafts: async () => {
+      if (!tab) throw absent();
+      return tab.live.grafts();
+    },
+    play: async (test2) => {
+      if (!tab) throw absent();
+      return tab.playMod(Promise.resolve(test2), playHow(settings()));
+    }
+  };
+  const liveProvided = api.services.provide("live", liveService, { version: LIVE_VERSION });
   const said = (outcome) => outcome === "shown" ? t("The map is on the play page's setup screen.") : t("The map is running on the play page.");
   const target = testTargetCall(api);
   const form = address ? testSettingsForm(api, settings) : null;
@@ -1291,6 +1462,7 @@ function activate(api) {
     for (const m of [...menu, ...debugMenu]) m.dispose();
     debugging?.dispose();
     provided.dispose();
+    liveProvided.dispose();
     page.dispose();
     bridge?.close();
     tab?.dispose();
