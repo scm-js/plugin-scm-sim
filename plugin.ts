@@ -11,7 +11,7 @@
  * the rest.
  */
 import type { PluginApi } from "@scm-js/plugin-api";
-import type { ScmSimService } from "./contract";
+import type { ScmSimLiveService, ScmSimService } from "./contract";
 import { simAddress } from "./src/address";
 import { Bridge, domFrames } from "./src/bridge";
 import { domViewFrames, pressOnWindow, ViewBridge } from "./src/view";
@@ -27,6 +27,8 @@ const msg = (text: string) => text;
 
 /** `ServiceInfo.version`: goes up when `contract.d.ts` changes in a way a consumer must know of. */
 const SERVICE_VERSION = 1;
+/** The same for `scm-sim.live` (`ScmSimLiveService` in `contract.d.ts`). */
+const LIVE_VERSION = 1;
 
 export function activate(api: PluginApi): () => void {
   const catalogue = api.i18n.register({ ko: KO });
@@ -49,6 +51,8 @@ export function activate(api: PluginApi): () => void {
     blocked: t("The browser did not let the play page open. Allow pop-ups for this site and try again."),
     noMap: t("There is no map to play."),
     replaced: t("Another map was started in its place."),
+    noTab: t("No play page is open: start a test game first."),
+    noAnswer: t("The play page did not answer. Reload it, or start the test game again."),
   });
 
   const settings = () => readSettings(api.storage.get<unknown>(SETTINGS_KEY, null));
@@ -112,6 +116,17 @@ export function activate(api: PluginApi): () => void {
     },
   };
   const provided = api.services.provide("engine", service, { version: SERVICE_VERSION });
+  // Live edit (`src/live.ts`): a mod changed while a test game runs in the play page's tab.
+  const liveService: ScmSimLiveService = {
+    present: address !== null,
+    playing: async () => (tab?.isOpen() ? tab.live.playing() : false),
+    state: async () => (tab?.isOpen() ? tab.live.state() : null),
+    onState: (listener) => (tab ? tab.live.onState(listener) : () => {}),
+    patch: async (fields, files = []) => { if (!tab) throw absent(); return tab.live.patch(fields, files); },
+    grafts: async () => { if (!tab) throw absent(); return tab.live.grafts(); },
+    play: async (test) => { if (!tab) throw absent(); return tab.playMod(Promise.resolve(test), playHow(settings())); },
+  };
+  const liveProvided = api.services.provide("live", liveService, { version: LIVE_VERSION });
   const said = (outcome: "started" | "shown") => outcome === "shown" ? t("The map is on the play page's setup screen.") : t("The map is running on the play page.");
   // Test in Browser: one of the editor's test targets where it has them, its own Tools item where it has not.
   const target = testTargetCall(api);
@@ -143,5 +158,5 @@ export function activate(api: PluginApi): () => void {
     api.commands.register({ id: "debugTriggers", title: msg("Debug Triggers in Browser"), enabled: () => api.document.isOpen(), run: () => debugging.run() }),
     api.menu.add("Tools", { label: msg("Debug Triggers in Browser"), icon: "plugin", command: "debugTriggers" }),
   ];
-  return () => { for (const v of [...views]) v.dispose(); for (const m of [...menu, ...debugMenu]) m.dispose(); debugging?.dispose(); provided.dispose(); page.dispose(); bridge?.close(); tab?.dispose(); catalogue.dispose(); };
+  return () => { for (const v of [...views]) v.dispose(); for (const m of [...menu, ...debugMenu]) m.dispose(); debugging?.dispose(); provided.dispose(); liveProvided.dispose(); page.dispose(); bridge?.close(); tab?.dispose(); catalogue.dispose(); };
 }

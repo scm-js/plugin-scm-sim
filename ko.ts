@@ -2,6 +2,8 @@
 // `tests/ko.test.ts` fails on a `t("…")` in the source with no entry here, and on an entry nothing uses.
 export const KO: Record<string, string> = {
   "Another map was started in its place.": "그 자리에 다른 맵이 시작되었습니다.",
+  "No play page is open: start a test game first.": "열린 플레이 페이지가 없습니다. 먼저 테스트 게임을 시작하세요.",
+  "The play page did not answer. Reload it, or start the test game again.": "플레이 페이지가 응답하지 않았습니다. 페이지를 새로 고치거나 테스트 게임을 다시 시작하세요.",
   "Asking the engine…": "엔진에 확인하는 중…",
   "Check again": "다시 확인",
   "Choose on the play page": "플레이 페이지에서 고르기",
