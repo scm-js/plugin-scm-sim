@@ -1143,9 +1143,11 @@ var PlayTab = class {
   hand() {
     const h = this.handing;
     if (!this.tab || this.tab.closed || !h || !this.ready) return;
-    if ("replay" in h) this.tab.postMessage({ type: "scmjs.play", replay: h.replay.slice(), name: h.name, frame: h.frame, ...h.player !== void 0 ? { player: h.player } : {} }, this.address.origin);
-    else {
-      const d = h.dataSet, dataSet = d ? { ...d, ...d.files ? { files: d.files.map((f) => ({ path: f.path.toLowerCase().replace(/\\/g, "/"), file: new File([f.bytes], f.path.split(/[\\/]/).pop() || "file") })) } : {} } : null;
+    if ("replay" in h) {
+      const dataSet = h.dataSet === void 0 ? {} : { dataSet: h.dataSet && pageDataSet(h.dataSet) };
+      this.tab.postMessage({ type: "scmjs.play", replay: h.replay.slice(), name: h.name, frame: h.frame, ...h.player !== void 0 ? { player: h.player } : {}, ...dataSet }, this.address.origin);
+    } else {
+      const dataSet = h.dataSet ? pageDataSet(h.dataSet) : null;
       this.tab.postMessage({ type: "scmjs.play", ...h.bytes ? { map: h.bytes.slice() } : {}, name: h.name, ...h.how, ...dataSet ? { dataSet } : {} }, this.address.origin);
     }
   }
@@ -1188,11 +1190,14 @@ var PlayTab = class {
   }
   /**
    * A replay watched on the play page from `frame`, through `player`'s eyes (a replay player's slot), with its Watch
-   * Replay menu open to play on from there. Call it from a click: the tab is opened first.
+   * Replay menu open to play on from there; `dataSet` the mod it was played with, when the file does not say
+   * (`validReplayDataSet`). Call it from a click: the tab is opened first.
    */
   async playReplay(replay, at) {
     if (!this.open()) throw new Error(this.words.blocked);
-    this.handing = { replay: replay.bytes, name: replay.name, frame: Math.max(0, Math.floor(at.frame)), ...at.player !== void 0 ? { player: at.player } : {} };
+    const valid = replay.dataSet === null ? null : validReplayDataSet(replay.dataSet);
+    const dataSet = replay.dataSet === null ? { dataSet: null } : valid ? { dataSet: valid } : {};
+    this.handing = { replay: replay.bytes, name: replay.name, frame: Math.max(0, Math.floor(at.frame)), ...at.player !== void 0 ? { player: at.player } : {}, ...dataSet };
     return this.handOver();
   }
   dispose() {
@@ -1201,6 +1206,22 @@ var PlayTab = class {
     this.live.gone();
   }
 };
+function pageDataSet(d) {
+  return { ...d, ...d.files ? { files: d.files.map((f) => ({ path: f.path.toLowerCase().replace(/\\/g, "/"), file: new File([f.bytes], f.path.split(/[\\/]/).pop() || "file") })) } : {} };
+}
+function validReplayDataSet(set) {
+  if (!set || typeof set !== "object") return null;
+  const { hash, name, url, files: files2 } = set;
+  const good = typeof hash === "string" && /^[0-9a-f]{16}$/.test(hash) ? hash : "";
+  const kept = Array.isArray(files2) ? files2.filter((f) => !!f && typeof f.path === "string" && !!f.path && f.bytes instanceof Uint8Array) : [];
+  if (!good && !kept.length) return null;
+  return {
+    hash: good,
+    ...typeof name === "string" && name.trim() ? { name: name.trim() } : {},
+    ...typeof url === "string" && /^https?:\/\/\S+$/i.test(url) ? { url } : {},
+    ...kept.length ? { files: kept } : {}
+  };
+}
 function validDataSet(set) {
   if (!set || typeof set !== "object") return null;
   const { id, name, hash } = set;
