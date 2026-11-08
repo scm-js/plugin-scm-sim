@@ -843,3 +843,50 @@ export interface ScmSimService {
    */
   fights?(replay: Uint8Array, fights: FightAsk[], options?: FightsOptions): Promise<FightsResult>;
 }
+
+/* ── Live edit: `scm-sim.live` ─────────────────────────────────────────────────────────── */
+
+/** A field of one of the game's tables, by PyMS's names (`@scm-js/core`'s schema): the value as the file stores it (hit points in 256ths). */
+export interface LiveField { table: string; id: number; field: string; part?: string; value: number }
+/** A file of the mod by the game's path (`arr/units.dat`, `unit/terran/marine.grp`, `datreq/buttons.graft`). */
+export interface LiveFile { path: string; bytes: Uint8Array }
+/** What became of one field or file, in words (`message`); the field's value before (`was`) when it was written. */
+export interface LiveItem { table?: string; id?: number; field?: string; part?: string; value?: number; was?: number; path?: string; message: string }
+/**
+ * The play page's answer to a patch. `applied`: in the running game now (a field written between two turns, a picture
+ * loaded and drawn, a graft's buttons or requirements written; the card follows). `deferred`: kept in the mod and
+ * taken at the next start (iscript, the sound table, strings, images.tbl and every other file read once). `errors`:
+ * refused, each with why — every item in a game between people (a change on one page only would be another game),
+ * a wider table, a requirement list longer than the room the game keeps it in. `frame`: when it was written.
+ */
+export interface LiveAnswer { applied: LiveItem[]; deferred: LiveItem[]; errors: LiveItem[]; frame?: number }
+/** The game in the play page's tab: running at all, played alone (the only game a patch is taken by), its mod, the files waiting for a start. */
+export interface LiveState { running: boolean; alone: boolean; frame: number; mod: { hash: string; name: string } | null; waiting: string[] }
+
+/**
+ * The `scm-sim.live` service (`ServiceInfo.version` 1): a mod changed while a test game runs in the play page's tab,
+ * and the running game takes the change. The tab is the one `scm-sim.engine`'s `play` and Test in Browser use.
+ */
+export interface ScmSimLiveService {
+  /** As `ScmSimService.present`: false where the editor has no play page beside it. */
+  readonly present: boolean;
+  /** Whether a game played alone is running in the tab now (asked of the page; false with no tab or no answer). */
+  playing(): Promise<boolean>;
+  /** What the page says of its game now; null with no tab or no answer. */
+  state(): Promise<LiveState | null>;
+  /** Called whenever the page says what it is playing (a game started), and with null when the tab is gone or loaded again. */
+  onState(listener: (state: LiveState | null) => void): () => void;
+  /** Fields and files sent to the running game. Rejects only when there is no tab or no answer; refusals are `errors`. */
+  patch(fields: readonly LiveField[], files?: readonly LiveFile[]): Promise<LiveAnswer>;
+  /** The running game's button sets and requirement lists as `.graft` files (`datreq/buttons.graft`, `datreq/units.graft` …), and what no graft can say. */
+  grafts(): Promise<{ files: LiveFile[]; left: string[] }>;
+  /**
+   * A test game: the mod's files (those that differ from the game's, by the shared hash rule) and a map — or, with
+   * `map` null, the mod alone, shown in the page's Mods dialog — handed to the tab, played as the Preferences page
+   * says (`useMapSettings`, when given, in place of its kind of game: a map made blank for the test has no start
+   * locations for a melee game). Call it from a click. Resolves "started" (or "shown") once the game is on the page.
+   */
+  play(test: LiveTest | Promise<LiveTest>): Promise<"started" | "shown">;
+}
+/** What `ScmSimLiveService.play` hands over. */
+export interface LiveTest { map: { bytes: Uint8Array; name: string } | null; mod: { name: string; hash: string; files: LiveFile[] }; useMapSettings?: boolean }

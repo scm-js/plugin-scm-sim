@@ -330,6 +330,24 @@ The rest of the view, in short (`contract.d.ts` has the details):
 - `onPointer` (since 0.10.0) gives the map pixel under the pointer, for the editor's status
   bar (`view.setPointer(p)`).
 
+## Live edit: `scm-sim.live`
+
+A second service, for a mod changed while a test game runs (the Mod Editor uses it). Its shape is `ScmSimLiveService`
+in `contract.d.ts`; reach it with `api.services.watch<ScmSimLiveService>("scm-sim.live", …)`.
+
+- `play({ map, mod: { name, hash, files }, useMapSettings? })` hands the mod's files (those that differ from the game's,
+  by the game's paths) and a map to the play page's tab — the same tab `play` uses. The page keeps the files as a mod
+  dropped on it would be, loads again with it and starts the map. With `map` null it only shows the mod. Call it from a
+  click.
+- `playing()` says whether a game played alone runs in the tab now; `state()` says more (the frame, the mod, the files
+  waiting for a start), and `onState(listener)` hears it whenever a game starts there.
+- `patch(fields, files)` sends changes into the running game. A field is `{ table, id, field, part?, value }` in PyMS's
+  names, as the file stores it (hit points in 256ths); a file is `{ path, bytes }` by the game's path. The answer lists
+  each item as `applied` (written into the game between two turns, a picture loaded and drawn, a graft's buttons or
+  requirements written), `deferred` (kept, and taken at the next start: animation scripts, the sound table, strings and
+  everything else the game reads once) or in `errors` with the reason. A game between people refuses every item.
+- `grafts()` reads the running game's button sets and requirement lists as `.graft` files, for a mod that has none.
+
 ## Replays it can play
 
 The engine runs StarCraft 1.16.1's own game code. A replay written by 1.16.1 is played as it
