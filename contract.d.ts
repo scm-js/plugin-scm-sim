@@ -773,8 +773,13 @@ export interface ScmSimService {
    * from that moment, alone, against a community bot, or with others. `replay` is a whole .rep file. Call it from the
    * click that asks for it. Resolves when the replay is on the page; rejects worded for the person (a play page from
    * before it: "No map came with the request."). Added in 0.15.0: check that the function is there before calling it.
+   *
+   * `dataSet` (0.16.0) names the mod the replay was played with, for a replay whose file does not say it (a replay
+   * the play page saved carries its mod in an `SCMJ` section, and the page reads that first): the page plays it with
+   * the mod it keeps under `hash`, takes `files` as a dropped mod when it has not got it, or says what the replay needs
+   * and where `url` publishes it. `null` is the game's own data. A page from before 0.16.0 ignores it.
    */
-  playReplay?(replay: { bytes: Uint8Array; name: string }, at: { frame: number; player?: number }): Promise<void>;
+  playReplay?(replay: { bytes: Uint8Array; name: string; dataSet?: ReplayDataSet | null }, at: { frame: number; player?: number }): Promise<void>;
   /**
    * The game drawn inside `element` (filling it), for watching a replay with its own
    * graphics: see `ScmSimView`. The engine is a gigabyte of memory, so keep one view and
@@ -850,6 +855,12 @@ export interface ScmSimService {
 export interface LiveField { table: string; id: number; field: string; part?: string; value: number }
 /** A file of the mod by the game's path (`arr/units.dat`, `unit/terran/marine.grp`, `datreq/buttons.graft`). */
 export interface LiveFile { path: string; bytes: Uint8Array }
+/**
+ * The mod a replay was played with, as `playReplay` hands it to the play page (0.16.0): `hash` as the page presents
+ * the mod (16 hex digits: the replay's `SCMJ` tag, `Replay.mod.dataSet.hash` in `@scm-js/replay`), its name, its
+ * makers' page, and its files in the game's paths when the editor has them (`files`, as Test Map's mod test hands them).
+ */
+export interface ReplayDataSet { hash: string; name?: string; url?: string; files?: LiveFile[] }
 /** What became of one field or file, in words (`message`); the field's value before (`was`) when it was written. */
 export interface LiveItem { table?: string; id?: number; field?: string; part?: string; value?: number; was?: number; path?: string; message: string }
 /**

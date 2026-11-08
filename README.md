@@ -170,6 +170,22 @@ with others. `replay` is a whole `.rep` file. It resolves when the replay is on 
 Added in 0.15.0, so check that it is there before offering it. A play page from before it
 answers "No map came with the request."
 
+`replay.dataSet` (since 0.16.0) names the mod the replay was played with: `{ hash, name?,
+url?, files? }`, with `hash` the 16 hex digits the play page names the mod by, `url` its
+makers' page and `files` the mod's files under the game's paths (`{ path, bytes }`), when
+the editor has them. A replay saved on the play page says its mod itself, in an `SCMJ`
+section (`Replay.mod` in `@scm-js/replay`), and the page reads that first, so `dataSet`
+matters for a replay whose file does not say. The page then:
+
+- plays it with the mod it keeps under that hash, switching to it (the page loads again,
+  and is handed the replay again);
+- keeps `files` as a dropped mod and plays it with that, when it has not got the mod;
+- otherwise says which mod the replay needs and where `url` publishes it.
+
+A mod of the same name kept under another hash is refused, with both hashes: the replay is
+never played with other files than its own. `null` means the game's own data. A play page
+from before 0.16.0 ignores the field.
+
 Call it from the click that asks for it.
 
 ### `pathing(scenario?, options?)`

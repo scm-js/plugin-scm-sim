@@ -12,15 +12,18 @@
  *
  * A replay goes the same way (the replay plugin's Play From Here; a play page from before says "No map came with the
  * request."):
- *   → `{ type: "scmjs.play", replay, name, frame, player? }`  watched from `frame`, through `player`'s eyes, the page's
- *                                                         Watch Replay menu open to play on from there
+ *   → `{ type: "scmjs.play", replay, name, frame, player?, dataSet? }`  watched from `frame`, through `player`'s eyes, the
+ *                                                         page's Watch Replay menu open to play on from there; `dataSet`
+ *                                                         `{ hash, name?, url?, files? }` the mod it was played with when
+ *                                                         the file does not say (the page reads a replay's own `SCMJ`
+ *                                                         tag first), `null` the game's own data
  *
  * "Ready" comes again when the play page starts over (a first visit takes the game's
  * files and reloads), and the map is handed over again each time, for as long as that
  * tab is open. Playing again sends the new map to the same tab. A play page from before the
  * settings plays every map with its own settings and says "started".
  */
-import type { LiveFile, LiveTest } from "../contract";
+import type { LiveFile, LiveTest, ReplayDataSet } from "../contract";
 import type { SimAddress } from "./address";
 import { LiveLink, type LiveWords } from "./live";
 import type { PlayHow } from "./settings";
@@ -46,7 +49,7 @@ export interface PlayWords extends Partial<LiveWords> { blocked: string; noMap: 
 export class PlayTab {
   private tab: Window | null = null;
   /** What the tab is handed each time it says ready: a map and how to play it, or a replay and where to stand in it. */
-  private handing: { bytes: Uint8Array | null; name: string; how: PlayHow; dataSet?: PlayDataSet } | { replay: Uint8Array; name: string; frame: number; player?: number } | null = null;
+  private handing: { bytes: Uint8Array | null; name: string; how: PlayHow; dataSet?: PlayDataSet } | { replay: Uint8Array; name: string; frame: number; player?: number; dataSet?: ReplayDataSet | null } | null = null;
   private ready = false;
   private waiting: { resolve(outcome: PlayOutcome): void; reject(e: Error): void } | null = null;
   private readonly address: SimAddress;
@@ -82,9 +85,11 @@ export class PlayTab {
     const h = this.handing;
     if (!this.tab || this.tab.closed || !h || !this.ready) return;
     // (A copy: the bytes stay here for the next time the tab asks.)
-    if ("replay" in h) this.tab.postMessage({ type: "scmjs.play", replay: h.replay.slice(), name: h.name, frame: h.frame, ...(h.player !== undefined ? { player: h.player } : {}) }, this.address.origin);
-    else {
-      const d = h.dataSet, dataSet = d ? { ...d, ...(d.files ? { files: d.files.map((f) => ({ path: f.path.toLowerCase().replace(/\\/g, "/"), file: new File([f.bytes as Uint8Array<ArrayBuffer>], f.path.split(/[\\/]/).pop() || "file") })) } : {}) } : null;
+    if ("replay" in h) {
+      const dataSet = h.dataSet === undefined ? {} : { dataSet: h.dataSet && pageDataSet(h.dataSet) };
+      this.tab.postMessage({ type: "scmjs.play", replay: h.replay.slice(), name: h.name, frame: h.frame, ...(h.player !== undefined ? { player: h.player } : {}), ...dataSet }, this.address.origin);
+    } else {
+      const dataSet = h.dataSet ? pageDataSet(h.dataSet) : null;
       this.tab.postMessage({ type: "scmjs.play", ...(h.bytes ? { map: h.bytes.slice() } : {}), name: h.name, ...h.how, ...(dataSet ? { dataSet } : {}) }, this.address.origin);
     }
   }
@@ -128,15 +133,42 @@ export class PlayTab {
 
   /**
    * A replay watched on the play page from `frame`, through `player`'s eyes (a replay player's slot), with its Watch
-   * Replay menu open to play on from there. Call it from a click: the tab is opened first.
+   * Replay menu open to play on from there; `dataSet` the mod it was played with, when the file does not say
+   * (`validReplayDataSet`). Call it from a click: the tab is opened first.
    */
-  async playReplay(replay: { bytes: Uint8Array; name: string }, at: { frame: number; player?: number }): Promise<PlayOutcome> {
+  async playReplay(replay: { bytes: Uint8Array; name: string; dataSet?: ReplayDataSet | null }, at: { frame: number; player?: number }): Promise<PlayOutcome> {
     if (!this.open()) throw new Error(this.words.blocked);
-    this.handing = { replay: replay.bytes, name: replay.name, frame: Math.max(0, Math.floor(at.frame)), ...(at.player !== undefined ? { player: at.player } : {}) };
+    // (null: the game's own data, said; a data set the page could not use: left out, as from an editor before 0.16.0)
+    const valid = replay.dataSet === null ? null : validReplayDataSet(replay.dataSet);
+    const dataSet = replay.dataSet === null ? { dataSet: null } : valid ? { dataSet: valid } : {};
+    this.handing = { replay: replay.bytes, name: replay.name, frame: Math.max(0, Math.floor(at.frame)), ...(at.player !== undefined ? { player: at.player } : {}), ...dataSet };
     return this.handOver();
   }
 
   dispose() { window.removeEventListener("message", this.heard); this.waiting = null; this.live.gone(); }
+}
+
+/** A data set as the page takes it: its files as `File`s under the game's paths, forward slashes and lower case. */
+function pageDataSet<T extends { files?: LiveFile[] }>(d: T): Omit<T, "files"> & { files?: { path: string; file: File }[] } {
+  return { ...d, ...(d.files ? { files: d.files.map((f) => ({ path: f.path.toLowerCase().replace(/\\/g, "/"), file: new File([f.bytes as Uint8Array<ArrayBuffer>], f.path.split(/[\\/]/).pop() || "file") })) } : {}) };
+}
+
+/**
+ * The mod a replay was played with, as the page is told it (0.16.0): a hash of 16 hex digits, or files to keep; a name
+ * and a web address when they are text. Null when it names nothing the page could use.
+ */
+export function validReplayDataSet(set: unknown): ReplayDataSet | null {
+  if (!set || typeof set !== "object") return null;
+  const { hash, name, url, files } = set as Record<string, unknown>;
+  const good = typeof hash === "string" && /^[0-9a-f]{16}$/.test(hash) ? hash : "";
+  const kept = Array.isArray(files) ? (files as { path?: unknown; bytes?: unknown }[]).filter((f): f is LiveFile => !!f && typeof f.path === "string" && !!f.path && f.bytes instanceof Uint8Array) : [];
+  if (!good && !kept.length) return null;
+  return {
+    hash: good,
+    ...(typeof name === "string" && name.trim() ? { name: name.trim() } : {}),
+    ...(typeof url === "string" && /^https?:\/\/\S+$/i.test(url) ? { url } : {}),
+    ...(kept.length ? { files: kept } : {}),
+  };
 }
 
 /** The data set as the page is told it: the three fields as strings, or nothing (an editor from before it, or the game's own data). */
