@@ -27,10 +27,11 @@
  * tab is open. Playing again sends the new map to the same tab. A play page from before the
  * settings plays every map with its own settings and says "started".
  */
-import type { LiveFile, LiveTest, ReplayDataSet } from "../contract";
+import type { LiveFile, LiveTest, ModSourceFile, ReplayDataSet } from "../contract";
 import { playAddress, type SimAddress } from "./address";
 import { LiveLink, type LiveWords } from "./live";
 import { featuresOf } from "./features";
+import { pageError, pageKeeps, pageModsOf, type ModSources, type PageMods } from "./mods";
 import type { PlayHow } from "./settings";
 
 /** The window's name: one tab for playing, found again by the next call. (The scmjs.dev plugin's Test Map in Browser uses the same.) */
@@ -58,6 +59,10 @@ export class PlayTab {
   private ready = false;
   /** What the page's last `ready` said it does (`features`; none from a page before scm-sim's R2b). */
   private said: string[] = [];
+  /** What the page's last `ready` said of the mods this browser keeps (0.19.0, "modFiles"); null from a page before. */
+  private mods: PageMods | null = null;
+  /** The answer the tab is waiting to give (resolved by `started`/`shown`, or rejected). */
+  private answer: Promise<PlayOutcome> | null = null;
   private waiting: { resolve(outcome: PlayOutcome): void; reject(e: Error): void } | null = null;
   private readonly address: SimAddress;
   private readonly words: PlayWords;
@@ -67,16 +72,19 @@ export class PlayTab {
     if (!m || typeof m.type !== "string") return;
     if (this.live.heard(m as Record<string, unknown>)) return;
     // (Ready again is the page loaded again: what it was asked before is not coming.)
-    if (m.type === "scmjs.play.ready") { this.live.gone(); this.ready = true; this.said = featuresOf((m as { features?: unknown }).features); this.hand(); }
+    if (m.type === "scmjs.play.ready") { this.live.gone(); this.ready = true; this.said = featuresOf((m as { features?: unknown }).features); this.mods = pageModsOf((m as { mods?: unknown }).mods); this.sources?.note(this.mods); this.hand(); }
     else if (m.type === "scmjs.play.started" || m.type === "scmjs.play.shown") { this.waiting?.resolve(m.type === "scmjs.play.shown" ? "shown" : "started"); this.waiting = null; }
-    else if (m.type === "scmjs.play.error") { this.waiting?.reject(new Error(String(m.message ?? ""))); this.waiting = null; }
+    else if (m.type === "scmjs.play.error") { this.waiting?.reject(pageError(m)); this.waiting = null; }
   };
 
   /** Live edit with the game in the tab (`src/live.ts`). */
   readonly live: LiveLink;
 
-  constructor(address: SimAddress, words: PlayWords) {
-    this.address = address; this.words = words;
+  /** Where a mod's files come from, and which the site's pages keep (shared with the plugin's other pages; 0.19.0). */
+  private readonly sources: ModSources | null;
+
+  constructor(address: SimAddress, words: PlayWords, sources: ModSources | null = null) {
+    this.address = address; this.words = words; this.sources = sources;
     this.live = new LiveLink((message) => {
       if (!this.tab || this.tab.closed || !this.ready) return false;
       this.tab.postMessage(message, this.address.origin);
@@ -93,12 +101,41 @@ export class PlayTab {
   private hand() {
     const h = this.handing;
     if (!this.tab || this.tab.closed || !h || !this.ready) return;
+    const fetching = this.filesToFetch(h.dataSet);
+    if (!fetching) { this.post(h, null); return; }
+    // (The mod's files gathered first, only now that the page said it does not keep the mod.)
+    const tab = this.tab, answer = this.answer, hash = h.dataSet?.hash ?? "";
+    void fetching.then((files) => {
+      if (this.handing !== h || this.tab !== tab || !this.ready) return;
+      if (files && answer && /^[0-9a-f]{16}$/.test(hash)) this.sources?.markKeeping(hash, answer);
+      this.post(h, files);
+    }, (err) => { if (this.handing === h) { this.waiting?.reject(err instanceof Error ? err : new Error(String(err))); this.waiting = null; } });
+  }
+
+  /**
+   * The mod's files to gather before the hand-over (0.19.0), or null to hand over as before: the caller's own source
+   * (a function) is asked whenever the page might keep them; a mod registered by its hash only on a page that says it
+   * does not keep the mod ("modFiles"). Files as a list go as they always did.
+   */
+  private filesToFetch(set: ReplayDataSet | PlayDataSet | null | undefined): Promise<ModSourceFile[] | null> | null {
+    if (!set || !this.sources || Array.isArray(set.files)) return null;
+    const hash = typeof set.hash === "string" ? set.hash : "";
+    const modFiles = this.said.includes("modFiles");
+    if (modFiles && (pageKeeps(this.mods, hash) || this.sources.isKept(hash))) return null;
+    if (typeof set.files === "function") return this.sources.files(set as ReplayDataSet);
+    if (!modFiles || !this.sources.has(set as ReplayDataSet)) return null;
+    return this.sources.settled(hash).then(() => (this.sources!.isKept(hash) ? null : this.sources!.files(set as ReplayDataSet)));
+  }
+
+  private post(h: NonNullable<PlayTab["handing"]>, files: ModSourceFile[] | null) {
+    if (!this.tab || this.tab.closed) return;
+    const withFiles = <T extends { files?: unknown }>(d: T) => ({ ...pageDataSet(d), ...(files ? { files } : {}) });
     // (A copy: the bytes stay here for the next time the tab asks.)
     if ("replay" in h) {
-      const dataSet = h.dataSet === undefined ? {} : { dataSet: h.dataSet && pageDataSet(h.dataSet) };
+      const dataSet = h.dataSet === undefined ? {} : { dataSet: h.dataSet && withFiles(h.dataSet) };
       this.tab.postMessage({ type: "scmjs.play", replay: h.replay.slice(), name: h.name, frame: h.frame, ...(h.player !== undefined ? { player: h.player } : {}), ...dataSet }, this.address.origin);
     } else {
-      const dataSet = h.dataSet ? pageDataSet(h.dataSet) : null;
+      const dataSet = h.dataSet ? withFiles(h.dataSet) : null;
       this.tab.postMessage({ type: "scmjs.play", ...(h.bytes ? { map: h.bytes.slice() } : {}), name: h.name, ...h.how, ...(dataSet ? { dataSet } : {}) }, this.address.origin);
     }
   }
@@ -126,6 +163,8 @@ export class PlayTab {
   private handOver(): Promise<PlayOutcome> {
     this.waiting?.reject(new Error(this.words.replaced));
     const started = new Promise<PlayOutcome>((resolve, reject) => { this.waiting = { resolve, reject }; });
+    this.answer = started;
+    started.catch(() => {});
     this.hand();
     return started;
   }
@@ -169,9 +208,10 @@ export class PlayTab {
   dispose() { window.removeEventListener("message", this.heard); this.waiting = null; this.live.gone(); }
 }
 
-/** A data set as the page takes it: its files as `File`s under the game's paths, forward slashes and lower case. */
-function pageDataSet<T extends { files?: LiveFile[] }>(d: T): Omit<T, "files"> & { files?: { path: string; file: File }[] } {
-  return { ...d, ...(d.files ? { files: d.files.map((f) => ({ path: f.path.toLowerCase().replace(/\\/g, "/"), file: new File([f.bytes as Uint8Array<ArrayBuffer>], f.path.split(/[\\/]/).pop() || "file") })) } : {}) };
+/** A data set as the page takes it: its files as `File`s under the game's paths, forward slashes and lower case (a source, a function, is not sent). */
+function pageDataSet<T extends { files?: unknown }>(d: T): Omit<T, "files"> & { files?: { path: string; file: File }[] } {
+  const { files, ...rest } = d;
+  return { ...rest, ...(Array.isArray(files) ? { files: (files as LiveFile[]).map((f) => ({ path: f.path.toLowerCase().replace(/\\/g, "/"), file: new File([f.bytes as Uint8Array<ArrayBuffer>], f.path.split(/[\\/]/).pop() || "file") })) } : {}) };
 }
 
 /**
@@ -183,12 +223,14 @@ export function validReplayDataSet(set: unknown): ReplayDataSet | null {
   const { hash, name, url, files, live } = set as Record<string, unknown>;
   const good = typeof hash === "string" && /^[0-9a-f]{16}$/.test(hash) ? hash : "";
   const kept = Array.isArray(files) ? (files as { path?: unknown; bytes?: unknown }[]).filter((f): f is LiveFile => !!f && typeof f.path === "string" && !!f.path && f.bytes instanceof Uint8Array) : [];
-  if (!good && !kept.length) return null;
+  // (a source of the files, asked only when the page has not got the mod: 0.19.0)
+  const source = typeof files === "function" ? (files as ReplayDataSet["files"]) : undefined;
+  if (!good && !kept.length && !source) return null;
   return {
     hash: good,
     ...(typeof name === "string" && name.trim() ? { name: name.trim() } : {}),
     ...(typeof url === "string" && /^https?:\/\/\S+$/i.test(url) ? { url } : {}),
-    ...(kept.length ? { files: kept } : {}),
+    ...(kept.length ? { files: kept } : source ? { files: source } : {}),
     ...(live === true ? { live: true } : {}),
   };
 }

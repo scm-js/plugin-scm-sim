@@ -2,14 +2,19 @@
  * The conversation with the engine's analysis page (scm-sim `web/analyse.ts`), which the
  * plugin frames out of sight:
  *
- *   ← `{ type: "scmjs.sim.ready", version, files, why? }`            the page, once it has looked for the game's files
+ *   ← `{ type: "scmjs.sim.ready", version, files, why?, features?, mods? }` the page, once it has looked for the game's files;
+ *                                                                   `mods` (0.19.0, "modFiles"): `{ kept, plays }`, the hashes of the
+ *                                                                   mods this browser keeps
  *   → `{ type: "scmjs.sim.analyse", id, replay, name?, options? }`   a whole .rep file's bytes; `options.dataSet`
  *                                                                   (0.18.0) the mod it was played with: `{ hash, name?,
  *                                                                   url?, live? }`, a page whose `ready` says "modAnalysis"
  *   ← `{ type: "scmjs.sim.progress", id, stage, frame, frames }`
  *   ← `{ type: "scmjs.sim.result", id, timeline }`                 `timeline.mod`: the mod it played with
- *   ← `{ type: "scmjs.sim.error", id, message }`
+ *   ← `{ type: "scmjs.sim.error", id, message, reason?, hash? }`    `reason` (0.19.0): "mod-missing", "mod-terrain",
+ *                                                                   "remastered-terrain" (`ScmSimError`)
  *   → `{ type: "scmjs.sim.cancel", id }`
+ *   A replay of a mod the page does not keep (0.19.0, "modFiles"): `options.dataSet.files` (`{ path, file }`s) go with
+ *   it, and `progress` says `stage: "keeping"` with a `message` while the page keeps them before it plays.
  *   → `{ type: "scmjs.sim.pathing", id, chk, options? }`            a map's pathing (a page from scm-sim 0.7.0 on,
  *                                                                   whose `ready` says `pathing`)
  *   ← `{ type: "scmjs.sim.progress", id, stage, done, total }`      `stage` "starting" or "walking"
@@ -39,6 +44,7 @@
  */
 import type { FightAsk, FightsOptions, FightsProgress, FightsResult, ScmSimDebugSession, ScmSimPicture, AnalyseOptions, MeasureOptions, MeasureProgress, MeasureResult, PathingOptions, PathingProgress, PathingResult, ReplayDataSet, ReplayTimeline, ScmSimStatus, TestCopiesOptions, TestCopyResult, TestRunOptions } from "../contract";
 import { featuresOf } from "./features";
+import { pageError, pageKeeps, pageModsOf, type ModSources, type PageMods } from "./mods";
 
 /**
  * The mod a replay was played with, as the analysis page is told it (0.18.0): its hash, name, makers' page and `live`,
@@ -82,9 +88,9 @@ export interface BridgeWords {
   noFights: string;
 }
 
-interface Ready { version: number | null; pathing: number | null; measure: number | null; tests: number | null; copies: number | null; debug: number | null; fights: number | null; files: ScmSimStatus["files"]; why: string | null; features: string[] }
+interface Ready { version: number | null; pathing: number | null; measure: number | null; tests: number | null; copies: number | null; debug: number | null; fights: number | null; files: ScmSimStatus["files"]; why: string | null; features: string[]; mods: PageMods | null }
 /** What the page said of a request on its way: its progress message, as it came. */
-type Heard = { stage?: unknown; frame?: unknown; frames?: unknown; done?: unknown; total?: unknown };
+type Heard = { stage?: unknown; frame?: unknown; frames?: unknown; done?: unknown; total?: unknown; message?: unknown };
 interface Pending { resolve(v: unknown): void; reject(e: Error): void; progress?(m: Heard): void; done(): void }
 
 export function abortError(): Error {
@@ -108,8 +114,11 @@ export class Bridge {
   /** How long the page may take to say it is there. */
   private readonly readyMs: number;
 
-  constructor(url: string, host: FrameHost, words: BridgeWords, readyMs = 30000) {
-    this.url = url; this.host = host; this.words = words; this.readyMs = readyMs;
+  /** Where a mod's files come from, and which the site's pages keep (shared with the plugin's other pages; 0.19.0). */
+  private readonly sources: ModSources | null;
+
+  constructor(url: string, host: FrameHost, words: BridgeWords, readyMs = 30000, sources: ModSources | null = null) {
+    this.url = url; this.host = host; this.words = words; this.readyMs = readyMs; this.sources = sources;
   }
 
   private open(): Promise<Ready> {
@@ -117,12 +126,13 @@ export class Bridge {
     this.ready = new Promise<Ready>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error(this.words.noAnswer)), this.readyMs);
       this.frame = this.host(this.url, (data) => {
-        const m = data as Heard & { type?: unknown; id?: unknown; version?: unknown; pathing?: unknown; measure?: unknown; tests?: unknown; copies?: unknown; debug?: unknown; fights?: unknown; files?: unknown; why?: unknown; timeline?: unknown; message?: unknown; features?: unknown } | null;
+        const m = data as Heard & { type?: unknown; id?: unknown; version?: unknown; pathing?: unknown; measure?: unknown; tests?: unknown; copies?: unknown; debug?: unknown; fights?: unknown; files?: unknown; why?: unknown; timeline?: unknown; message?: unknown; features?: unknown; mods?: unknown; reason?: unknown; hash?: unknown } | null;
         if (!m || typeof m.type !== "string") return;
         if (m.type === "scmjs.sim.ready") {
           clearTimeout(timer);
           const files = m.files === "archives" || m.files === "copy" || m.files === "server" ? m.files : null;
-          resolve({ version: typeof m.version === "number" ? m.version : null, pathing: typeof m.pathing === "number" ? m.pathing : null, measure: typeof m.measure === "number" ? m.measure : null, tests: typeof m.tests === "number" ? m.tests : null, copies: typeof m.copies === "number" ? m.copies : null, debug: typeof m.debug === "number" ? m.debug : null, fights: typeof m.fights === "number" ? m.fights : null, files, why: typeof m.why === "string" ? m.why : null, features: featuresOf(m.features) });
+          resolve({ version: typeof m.version === "number" ? m.version : null, pathing: typeof m.pathing === "number" ? m.pathing : null, measure: typeof m.measure === "number" ? m.measure : null, tests: typeof m.tests === "number" ? m.tests : null, copies: typeof m.copies === "number" ? m.copies : null, debug: typeof m.debug === "number" ? m.debug : null, fights: typeof m.fights === "number" ? m.fights : null, files, why: typeof m.why === "string" ? m.why : null, features: featuresOf(m.features), mods: pageModsOf(m.mods) });
+          this.sources?.note(pageModsOf(m.mods));
           return;
         }
         const p = typeof m.id === "number" ? this.pending.get(m.id) : undefined;
@@ -135,7 +145,7 @@ export class Bridge {
         else if (m.type === "scmjs.sim.pictured") { p.done(); const k = m as { frame?: unknown; kept?: unknown }; p.resolve({ frame: Number(k.frame) || 0, kept: k.kept }); }
         else if (m.type === "scmjs.sim.tested") { p.done(); const t = m as { report?: unknown; copies?: unknown }; p.resolve(Array.isArray(t.copies) ? t.copies : t.report); }
         else if (m.type === "scmjs.sim.fought") { p.done(); p.resolve((m as { result?: unknown }).result); }
-        else if (m.type === "scmjs.sim.error") { p.done(); p.reject(new Error(String(m.message ?? ""))); }
+        else if (m.type === "scmjs.sim.error") { p.done(); p.reject(pageError(m)); }
       });
     });
     this.opening = true;
@@ -151,16 +161,40 @@ export class Bridge {
     if (this.pending.size === 0 && !this.opening && this.sessions.size === 0) this.close();
     try {
       const r = await this.open();
-      return { available: r.files !== null, files: r.files, reason: r.files ? null : r.why ?? this.words.noFiles, timeline: r.version, pathing: r.pathing, measure: r.measure, tests: r.tests, copies: r.copies, debug: r.debug, fights: r.fights, features: r.features };
+      return { available: r.files !== null, files: r.files, reason: r.files ? null : r.why ?? this.words.noFiles, timeline: r.version, pathing: r.pathing, measure: r.measure, tests: r.tests, copies: r.copies, debug: r.debug, fights: r.fights, features: r.features, ...(r.mods ? { mods: r.mods } : {}) };
     } catch (err) {
       return { available: false, files: null, reason: err instanceof Error ? err.message : String(err), timeline: null, pathing: null, measure: null, tests: null, copies: null, debug: null, fights: null, features: [] };
     }
   }
 
   async analyse(replay: Uint8Array, options: AnalyseOptions = {}): Promise<ReplayTimeline> {
-    const progress = options.onProgress && ((m: Heard) => options.onProgress!({ stage: m.stage === "playing" ? "playing" : "starting", frame: Number(m.frame) || 0, frames: Number(m.frames) || 0 }));
-    // (A copy: the caller keeps its bytes.)
-    return this.ask<ReplayTimeline>(options.signal, progress, (id) => ({ type: "scmjs.sim.analyse", id, replay: replay.slice(), name: options.name, options: { sampleEvery: options.sampleEvery, positionsEvery: options.positionsEvery, ...withDataSet(options.dataSet) } }));
+    const progress = options.onProgress && ((m: Heard) => options.onProgress!({ stage: m.stage === "playing" ? "playing" : m.stage === "keeping" ? "keeping" : "starting", frame: Number(m.frame) || 0, frames: Number(m.frames) || 0, ...(m.stage === "keeping" && typeof m.message === "string" ? { message: m.message } : {}) }));
+    return this.withModFiles(options.dataSet, (dataSet) =>
+      // (A copy: the caller keeps its bytes.)
+      this.ask<ReplayTimeline>(options.signal, progress, (id) => ({ type: "scmjs.sim.analyse", id, replay: replay.slice(), name: options.name, options: { sampleEvery: options.sampleEvery, positionsEvery: options.positionsEvery, ...dataSet } })));
+  }
+
+  /**
+   * A request that names a mod (0.19.0, a page whose `ready` says "modFiles"): its files go with it when the page does
+   * not keep the mod and they can be found (`ModSources`), once for the site — a request while another page keeps the
+   * same mod waits for that, then goes without them. Otherwise the data set goes as before 0.19.0, without files.
+   */
+  private async withModFiles<T>(set: ReplayDataSet | null | undefined, send: (dataSet: { dataSet?: Record<string, unknown> }) => Promise<T>): Promise<T> {
+    const said = withDataSet(set);
+    const r = said.dataSet && this.sources && set ? await this.open().catch(() => null) : null;
+    if (!r || !r.features.includes("modFiles") || !said.dataSet || !this.sources || !set) return send(said);
+    const sources = this.sources, hash = said.dataSet.hash;
+    await sources.settled(hash);
+    if (pageKeeps(r.mods, hash) || sources.isKept(hash) || !sources.has(set)) return send(said);
+    const kept = await sources.keepOnce(hash, async () => {
+      const files = await sources.files(set);
+      const result = await send({ dataSet: { ...said.dataSet, ...(files ? { files } : {}) } });
+      if (files) sources.noteKept(hash);
+      return { result };
+    });
+    // (Kept by another request meanwhile: this one goes without files, and the page finds what was kept.)
+    if (kept) return kept.result;
+    return send(said);
   }
 
   /** A map's pathing: `scenario` is the bare scenario (.chk bytes). */
@@ -219,7 +253,7 @@ export class Bridge {
   async fights(replay: Uint8Array, fights: FightAsk[], options: FightsOptions = {}): Promise<FightsResult> {
     const { signal, onProgress, dataSet, ...asked } = options;
     const progress = onProgress && ((m: Heard) => onProgress({ stage: m.stage === "playing" ? "playing" : "starting", frame: Number(m.frame) || 0, frames: Number(m.frames) || 0 } satisfies FightsProgress));
-    return this.ask<FightsResult>(signal, progress, (id) => ({ type: "scmjs.sim.fights", id, replay: replay.slice(), fights, options: { ...asked, ...withDataSet(dataSet) } }), (r) => (r.fights === null ? this.words.noFights : null));
+    return this.withModFiles(dataSet, (d) => this.ask<FightsResult>(signal, progress, (id) => ({ type: "scmjs.sim.fights", id, replay: replay.slice(), fights, options: { ...asked, ...d } }), (r) => (r.fights === null ? this.words.noFights : null)));
   }
 
   /** One request to the page: `message` with its id, answered by a result, an error, or a cancel when `signal` aborts. */

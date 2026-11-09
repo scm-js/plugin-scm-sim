@@ -123,8 +123,11 @@ words, when the browser has no copy of StarCraft or the engine's page did not an
 not, as its pages say it: `"replayDoor"` (a replay's mod is read from the file and played,
 switched to or asked for) and `"liveSwitch"` (a replay of a mod whose code ran loads the page
 again with `?lift=live` instead of refusing). From the analysis page it can also hold
-`"modAnalysis"` (since 0.18.0): `analyse` and `fights` play a replay of a mod with that mod. It
-is empty for an older page.
+`"modAnalysis"` (since 0.18.0): `analyse` and `fights` play a replay of a mod with that mod.
+`"modFiles"` (since 0.19.0) means the pages say which mods the browser keeps (`mods`: the
+hashes it keeps, and the one it plays), take a mod's files with a replay when they do not keep
+it, and say why they could not do something in a word as well as a sentence (see
+[Mods the engine has not got](#mods-the-engine-has-not-got)). It is empty for an older page.
 
 ### `analyse(replay, options?)`
 
@@ -160,7 +163,9 @@ with a sentence that names the mod, its hash and its makers' page. A replay of a
 plugins run takes about 17 seconds to start, then plays at 30 to 40 game frames a second (a
 twenty-minute game takes over ten minutes), and uses about 2 GB of memory, given back when
 the replay ends. A page from before 0.18.0's engine plays such a replay with the game's own
-files or refuses it, so check `features` first.
+files or refuses it, so check `features` first. Since 0.19.0 the mod's files go with the
+replay when the page has not got the mod and they can be found, and the page keeps them
+first: see [Mods the engine has not got](#mods-the-engine-has-not-got).
 
 A unit's number is the timeline's own. It is counted from 0 in the order units appear and
 stays with the unit for its whole life. When reading the events:
@@ -367,8 +372,14 @@ A replay of a mod (since 0.17.0): pass the mod as `load`'s third argument, as `p
 takes it (`hash` and `live` are used). The view's page plays a mod only when its address names
 it, and never switches to another, so the view loads at `?view&mod=<hash>` (with
 `&lift=live` when `live`) before the replay goes in, and back at `?view` for a replay with no
-mod. The page plays the mod it keeps under that hash and rejects the load in a sentence when
-the browser has not got it. Older pages ignore the mod.
+mod. The page plays the mod it keeps under that hash. Older pages ignore the mod.
+
+Since 0.19.0, when the page has not got the mod, its files go with the replay (the data set's
+own `files`, or the mod registered under its hash with `provideMod`). The page keeps them,
+which takes a minute or two for a large mod with plugins (`onKeeping` gives its progress
+lines to show meanwhile), loads itself again on the mod and plays the replay. With no files to
+hand, the load rejects with `reason` `"mod-missing"`: the view never plays such a replay with
+StarCraft's own data instead.
 
 The rest of the view, in short (`contract.d.ts` has the details):
 
@@ -389,6 +400,45 @@ The rest of the view, in short (`contract.d.ts` has the details):
   (`view.wheel(w)`) and the game zooms the way the map does.
 - `onPointer` (since 0.10.0) gives the map pixel under the pointer, for the editor's status
   bar (`view.setPointer(p)`).
+
+### Mods the engine has not got
+
+Since 0.19.0, with a page whose `features` has `"modFiles"`.
+
+A plugin that has a mod open registers it once, under the hash the editor's data set names it
+by, and everything that plays with that hash finds its files there: the game view,
+`playReplay`, Test in Browser, `analyse` and `fights`.
+
+```ts
+const sim = api.services.get<ScmSimService>("scm-sim", "engine");
+const provided = sim?.provideMod?.(hash, {
+  name: "Cosmonarchy BW",
+  files: async () => gatherFiles(),   // [{ path, file }] or [{ path, bytes }]
+});
+// when the mod closes, or before registering again under a new hash:
+provided?.dispose();
+```
+
+`files` is called only when a page says it does not keep the mod, because gathering a large
+mod's files is not free. Paths are the game's (`arr/units.dat`), or the paths inside the mod's
+folder (`Cosmonarchy/mpq/arr/units.dat`, `Cosmonarchy/plugins/gptp.qdp`): the page reads a
+folder's layout as it reads a folder dropped on it. The page keeps the mod as it keeps a
+dropped one, under the hash it works out itself, and also answers to the hash it was handed
+it by when the two differ. Every page of the site keeps mods in the same place, so a mod is
+kept once: while one page keeps it, another request for it waits, then goes without files.
+A caller's own `dataSet.files` (a list, or a function returning one) come before the
+registered mod.
+
+When a page cannot do something, the promise rejects with an `Error` worded for the person.
+From 0.19.0 it may also carry `reason` (`ScmSimError` in `contract.d.ts`):
+
+| `reason` | What it means |
+| --- | --- |
+| `"mod-missing"` | It is to be played with a mod this browser does not keep, and no files came. `hash` names the mod. |
+| `"mod-terrain"` | The map is on terrain StarCraft has not got, neither 1.16.1 nor Remastered. It was made for a mod and plays with that mod's files, or the mod played lacks it too (another mod, or another version of it). |
+| `"remastered-terrain"` | The map is on terrain only StarCraft: Remastered has. A copy of the game made from a Remastered installation plays it. |
+
+A page from before says no reason.
 
 ## Live edit: `scm-sim.live`
 
