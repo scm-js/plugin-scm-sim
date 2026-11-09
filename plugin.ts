@@ -20,6 +20,7 @@ import { registerPreferencesPage, testSettingsForm } from "./src/page";
 import { PlayTab } from "./src/play";
 import { playHow, readSettings, SETTINGS_KEY } from "./src/settings";
 import { testTargetCall } from "./src/target";
+import { ModSources } from "./src/mods";
 import { KO } from "./ko";
 
 /** Marks a string the editor translates when it draws it (a menu label, a command's title), so the catalogue's test finds it. */
@@ -35,6 +36,8 @@ export function activate(api: PluginApi): () => void {
   const t = api.i18n.t;
   const address = typeof location === "undefined" ? null : simAddress(location);
   const absent = () => new Error(t("This editor has no play page beside it, so the engine cannot be reached from here. It is at scmjs.dev."));
+  // Mods other plugins have open, by hash, and which the site's pages keep: one for the analysis page, the tab and the views.
+  const sources = new ModSources();
   const bridge = address && new Bridge(address.analyse, domFrames(address.origin), {
     noAnswer: t("The engine's page did not answer."),
     noFiles: t("This browser has no copy of StarCraft to play from. Give the site your game on the Game Data page."),
@@ -46,14 +49,14 @@ export function activate(api: PluginApi): () => void {
     sessionOver: t("That debugging session is over."),
     noCopies: t("A test of several players runs a copy of the game for each, which needs memory shared between them: this browser does not allow that on the engine's page (Chrome and Edge from version 137 do), or the page is from before it."),
     noFights: t("The engine's page cannot play a fight again yet. Reload the editor and try again."),
-  });
+  }, undefined, sources);
   const tab = address && new PlayTab(address, {
     blocked: t("The browser did not let the play page open. Allow pop-ups for this site and try again."),
     noMap: t("There is no map to play."),
     replaced: t("Another map was started in its place."),
     noTab: t("No play page is open: start a test game first."),
     noAnswer: t("The play page did not answer. Reload it, or start the test game again."),
-  });
+  }, sources);
 
   const settings = () => readSettings(api.storage.get<unknown>(SETTINGS_KEY, null));
   /** The data set the open map is made with, as Test Map hands it over, for a test asked for through the service. */
@@ -106,7 +109,7 @@ export function activate(api: PluginApi): () => void {
         replaced: t("Another replay was loaded in its place."),
         closed: t("The game view was closed."),
         noDebug: t("The game view cannot draw a debugged run yet. Reload the editor and try again."),
-      });
+      }, undefined, sources);
       // The keys the view does not use are the editor's: pressed again on its window.
       view.onKey(pressOnWindow);
       views.add(view);
@@ -114,6 +117,7 @@ export function activate(api: PluginApi): () => void {
       view.dispose = () => { views.delete(view); dispose(); };
       return view;
     },
+    provideMod: (hash, mod) => sources.provide(hash, mod),
   };
   const provided = api.services.provide("engine", service, { version: SERVICE_VERSION });
   // Live edit (`src/live.ts`): a mod changed while a test game runs in the play page's tab.

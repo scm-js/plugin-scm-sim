@@ -17,10 +17,18 @@
  * another address than the frame's points the frame there first and waits for the page's `ready` again. A page from
  * R2b on also loads itself again where a mod's code needs `?lift=live` and the address lacks it, and answers the
  * `load` waiting from there: nothing is done here for that.
+ *
+ * A page whose `ready` says "modFiles" (0.19.0) is also told the data set in the `load` itself, and lists the mods it
+ * keeps: when it does not keep the replay's, its files go with the replay (`ModSources`: the caller's own, else the mod
+ * registered under its hash), and the page keeps them, says how far it is (`scmjs.view.keeping`), loads itself again on
+ * the mod and answers the `load` from there. With no files it answers `error` with `reason` "mod-missing". A page from
+ * before is spoken to as before.
  */
-import type { Disposable, ReplayDataSet, ScmSimPicture, ScmSimView, ViewCamera, ViewFrame, ViewHover, ViewHoverUnit, ViewKey, ViewLooks, ViewOptions, ViewPointer, ViewReady, ViewTrack, ViewUnits, ViewWheel, ViewedReplay } from "../contract";
+import type { Disposable, ReplayDataSet, ScmSimPicture, ScmSimView, ViewCamera, ViewFrame, ViewHover, ViewHoverUnit, ViewKey, ViewKeeping, ViewLooks, ViewOptions, ViewPointer, ViewReady, ViewTrack, ViewUnits, ViewWheel, ViewedReplay } from "../contract";
 import { viewAddress } from "./address";
 import { featuresOf } from "./features";
+import { analysedDataSet } from "./bridge";
+import { pageError, pageKeeps, pageModsOf, type ModSources } from "./mods";
 
 export interface HostedFrame {
   post(message: object): void;
@@ -65,7 +73,12 @@ export class ViewBridge implements ScmSimView {
   private readonly hovers = new Set<Listener<ViewHover | null>>();
   private readonly wheels = new Set<Listener<ViewWheel>>();
   private readonly pointers = new Set<Listener<ViewPointer | null>>();
+  private readonly keepings = new Set<Listener<ViewKeeping>>();
   private closed = false;
+  /** What the page said when it last loaded. */
+  private latest: ViewReady = { files: null, reason: null };
+  /** Where a mod's files come from, and which the site's pages keep (shared with the plugin's other pages). */
+  private readonly sources: ModSources | null;
   /** The address the view's page was opened at (`?view`), and the one the frame stands at now (`viewAddress`). */
   private readonly base: string;
   private at: string;
@@ -75,8 +88,9 @@ export class ViewBridge implements ScmSimView {
   private loads = 0;
   private readonly readyMs: number;
 
-  constructor(url: string, element: HTMLElement, host: ViewFrameHost, words: ViewWords, readyMs = 30000) {
+  constructor(url: string, element: HTMLElement, host: ViewFrameHost, words: ViewWords, readyMs = 30000, sources: ModSources | null = null) {
     this.words = words;
+    this.sources = sources;
     this.base = this.at = url;
     this.readyMs = readyMs;
     let answered: (r: ViewReady) => void = () => {};
@@ -90,7 +104,10 @@ export class ViewBridge implements ScmSimView {
           clearTimeout(timer);
           this.debugs = typeof m.debug === "number";
           const f = files(m.files);
-          const r: ViewReady = { files: f, reason: f ? null : typeof m.why === "string" && m.why ? m.why : words.noFiles, features: featuresOf(m.features) };
+          const mods = pageModsOf(m.mods);
+          const r: ViewReady = { files: f, reason: f ? null : typeof m.why === "string" && m.why ? m.why : words.noFiles, features: featuresOf(m.features), ...(mods ? { mods } : {}) };
+          this.latest = r;
+          this.sources?.note(mods);
           answered(r);
           // (Said again on every load of the page: the frame pointed at another address, or the page loading itself again.)
           for (const w of this.readyAgain.splice(0)) w(r);
@@ -113,8 +130,13 @@ export class ViewBridge implements ScmSimView {
           const message = String(m.message ?? "");
           const l = this.loading ?? this.debugging;
           if (l === this.loading) this.loading = null; else this.debugging = null;
-          if (l) l.reject(new Error(message));
+          if (l) l.reject(pageError(m));
           else for (const e of this.errors) e(message);
+          return;
+        }
+        case "scmjs.view.keeping": {
+          const k: ViewKeeping = { hash: typeof m.hash === "string" ? m.hash : "", message: String(m.message ?? "") };
+          for (const l of this.keepings) l(k);
           return;
         }
         case "scmjs.view.debugged": {
@@ -167,11 +189,34 @@ export class ViewBridge implements ScmSimView {
     // The mod the replay was played with is in the page's address: the frame goes there first when it stands elsewhere.
     const ticket = ++this.loads, at = viewAddress(this.base, dataSet);
     if (at !== this.at) await this.goTo(at, ticket);
-    return new Promise<ViewedReplay>((resolve, reject) => {
+    // (A copy: the caller keeps its bytes.)
+    const message: Record<string, unknown> = { type: "scmjs.view.load", replay: replay.slice(), name };
+    const said = analysedDataSet(dataSet), page = this.latest;
+    let handing: string | null = null;
+    if (said && this.sources && (page.features ?? []).includes("modFiles")) {
+      const hash = said.hash, sent: Record<string, unknown> = { ...said };
+      message.dataSet = sent;
+      // (Another page keeping it now: waited for, then this page finds what it kept.)
+      await this.sources.settled(hash);
+      if (ticket !== this.loads) throw new Error(this.words.replaced);
+      if (!pageKeeps(page.mods ?? null, hash) && !this.sources.isKept(hash) && this.sources.has(dataSet)) {
+        const files = await this.sources.files(dataSet);
+        if (this.closed) throw new Error(this.words.closed);
+        if (ticket !== this.loads) throw new Error(this.words.replaced);
+        if (files) { sent.files = files; handing = hash; }
+      }
+    }
+    const loaded = new Promise<ViewedReplay>((resolve, reject) => {
       this.loading = { resolve, reject };
-      // (A copy: the caller keeps its bytes.)
-      this.frame.post({ type: "scmjs.view.load", replay: replay.slice(), name });
+      this.frame.post(message);
     });
+    if (handing) {
+      const hash = handing;
+      // (Kept once: another request for it waits until this page has kept it, or could not.)
+      this.sources!.markKeeping(hash, loaded);
+      void loaded.then(() => this.sources!.noteKept(hash), () => {});
+    }
+    return loaded;
   }
 
   /**
@@ -247,6 +292,7 @@ export class ViewBridge implements ScmSimView {
   onHover(listener: Listener<ViewHover | null>): Disposable { return this.listen(this.hovers, listener); }
   onWheel(listener: Listener<ViewWheel>): Disposable { return this.listen(this.wheels, listener); }
   onPointer(listener: Listener<ViewPointer | null>): Disposable { return this.listen(this.pointers, listener); }
+  onKeeping(listener: Listener<ViewKeeping>): Disposable { return this.listen(this.keepings, listener); }
 
   dispose(): void {
     if (this.closed) return;
@@ -258,7 +304,7 @@ export class ViewBridge implements ScmSimView {
     this.looksWaiting.length = 0;
     for (const w of this.readyAgain.splice(0)) w(null);
     this.errors.clear(); this.shown.clear();
-    this.frames.clear(); this.cameras.clear(); this.keys.clear(); this.units.clear(); this.hovers.clear(); this.wheels.clear(); this.pointers.clear();
+    this.frames.clear(); this.cameras.clear(); this.keys.clear(); this.units.clear(); this.hovers.clear(); this.wheels.clear(); this.pointers.clear(); this.keepings.clear();
     this.frame.remove();
   }
 }
