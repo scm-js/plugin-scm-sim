@@ -2,7 +2,7 @@
  * The play page as a replay viewer inside an element of the editor's (scm-sim `web/viewer.ts`, the page at
  * `/play/?view`): the frame is made in the element given, and the conversation with it is behind `ScmSimView`.
  *
- *   ← `{ type: "scmjs.view.ready", version, files, why? }`       the page, once it has looked for the game's files
+ *   ← `{ type: "scmjs.view.ready", version, files, why?, features? }` the page, once it has looked for the game's files
  *   → `{ type: "scmjs.view.load", replay, name }`                 ← `loaded {…}` or `error {message}`
  *   → `play {playing}`, `speed {multiplier}`, `seek {frame}`, `camera {x, y}`, `follow {track}`, `player {slot}`
  *   → `options {fog?, sound?, volume?, music?, duck?, remastered?, lighting?, console?}`   ← `looks {…}`
@@ -12,11 +12,20 @@
  *
  * One load at a time: a load asked for while another is on its way replaces it, and the first is rejected. Nothing
  * here touches the DOM directly: the frame is behind `ViewFrameHost`, so the conversation is tested without one.
+ *
+ * The mod a replay was played with (0.17.0, `load`'s `dataSet`) is in the page's address (`viewAddress`): a load with
+ * another address than the frame's points the frame there first and waits for the page's `ready` again. A page from
+ * R2b on also loads itself again where a mod's code needs `?lift=live` and the address lacks it, and answers the
+ * `load` waiting from there: nothing is done here for that.
  */
-import type { Disposable, ScmSimPicture, ScmSimView, ViewCamera, ViewFrame, ViewHover, ViewHoverUnit, ViewKey, ViewLooks, ViewOptions, ViewPointer, ViewReady, ViewTrack, ViewUnits, ViewWheel, ViewedReplay } from "../contract";
+import type { Disposable, ReplayDataSet, ScmSimPicture, ScmSimView, ViewCamera, ViewFrame, ViewHover, ViewHoverUnit, ViewKey, ViewLooks, ViewOptions, ViewPointer, ViewReady, ViewTrack, ViewUnits, ViewWheel, ViewedReplay } from "../contract";
+import { viewAddress } from "./address";
+import { featuresOf } from "./features";
 
 export interface HostedFrame {
   post(message: object): void;
+  /** Points the frame at another address (the page loads there and says `ready` again). */
+  go(url: string): void;
   remove(): void;
 }
 /** Makes the frame inside `element`; `heard` is given every message that frame's page sends. */
@@ -35,6 +44,7 @@ export interface ViewWords {
 type Listener<T> = (value: T) => void;
 
 const files = (v: unknown): ViewReady["files"] => (v === "archives" || v === "copy" || v === "server" ? v : null);
+
 const looksOf = (m: Record<string, unknown>): ViewLooks => ({ remastered: m.remastered === true, remasteredOn: m.remasteredOn === true, lighting: m.lighting === true, lightingOn: m.lightingOn === true });
 
 export class ViewBridge implements ScmSimView {
@@ -56,9 +66,19 @@ export class ViewBridge implements ScmSimView {
   private readonly wheels = new Set<Listener<ViewWheel>>();
   private readonly pointers = new Set<Listener<ViewPointer | null>>();
   private closed = false;
+  /** The address the view's page was opened at (`?view`), and the one the frame stands at now (`viewAddress`). */
+  private readonly base: string;
+  private at: string;
+  /** Waiting for the page's `ready` after the frame was pointed elsewhere. */
+  private readyAgain: ((r: ViewReady | null) => void)[] = [];
+  /** Loads asked for, counted: one waiting for the page to load again is replaced by a later one. */
+  private loads = 0;
+  private readonly readyMs: number;
 
   constructor(url: string, element: HTMLElement, host: ViewFrameHost, words: ViewWords, readyMs = 30000) {
     this.words = words;
+    this.base = this.at = url;
+    this.readyMs = readyMs;
     let answered: (r: ViewReady) => void = () => {};
     this.ready = new Promise<ViewReady>((resolve) => { answered = resolve; });
     const timer = setTimeout(() => answered({ files: null, reason: words.noAnswer }), readyMs);
@@ -70,7 +90,10 @@ export class ViewBridge implements ScmSimView {
           clearTimeout(timer);
           this.debugs = typeof m.debug === "number";
           const f = files(m.files);
-          answered({ files: f, reason: f ? null : typeof m.why === "string" && m.why ? m.why : words.noFiles });
+          const r: ViewReady = { files: f, reason: f ? null : typeof m.why === "string" && m.why ? m.why : words.noFiles, features: featuresOf(m.features) };
+          answered(r);
+          // (Said again on every load of the page: the frame pointed at another address, or the page loading itself again.)
+          for (const w of this.readyAgain.splice(0)) w(r);
           return;
         }
         case "scmjs.view.loaded": {
@@ -135,16 +158,38 @@ export class ViewBridge implements ScmSimView {
     });
   }
 
-  async load(replay: Uint8Array, name = "replay.rep"): Promise<ViewedReplay> {
+  async load(replay: Uint8Array, name = "replay.rep", dataSet?: ReplayDataSet | null): Promise<ViewedReplay> {
     const r = await this.ready;
     if (this.closed) throw new Error(this.words.closed);
     if (!r.files) throw new Error(r.reason ?? this.words.noFiles);
     this.loading?.reject(new Error(this.words.replaced));
+    this.loading = null;
+    // The mod the replay was played with is in the page's address: the frame goes there first when it stands elsewhere.
+    const ticket = ++this.loads, at = viewAddress(this.base, dataSet);
+    if (at !== this.at) await this.goTo(at, ticket);
     return new Promise<ViewedReplay>((resolve, reject) => {
       this.loading = { resolve, reject };
       // (A copy: the caller keeps its bytes.)
       this.frame.post({ type: "scmjs.view.load", replay: replay.slice(), name });
     });
+  }
+
+  /**
+   * Points the frame at `at` when it stands elsewhere and waits for the page there to say ready; rejects when a later
+   * request came meanwhile, the view was closed, or the page did not answer or has no game files.
+   */
+  private async goTo(at: string, ticket: number): Promise<void> {
+    this.at = at;
+    const again = new Promise<ViewReady | null>((resolve) => {
+      const timer = setTimeout(() => resolve(null), this.readyMs);
+      this.readyAgain.push((r) => { clearTimeout(timer); resolve(r); });
+    });
+    this.frame.go(at);
+    const r = await again;
+    if (this.closed) throw new Error(this.words.closed);
+    if (ticket !== this.loads) throw new Error(this.words.replaced);
+    if (!r) throw new Error(this.words.noAnswer);
+    if (!r.files) throw new Error(r.reason ?? this.words.noFiles);
   }
 
   /**
@@ -160,6 +205,10 @@ export class ViewBridge implements ScmSimView {
     this.loading?.reject(new Error(this.words.replaced));
     this.loading = null;
     this.debugging?.reject(new Error(this.words.replaced));
+    this.debugging = null;
+    // (A map's run is the game's own data: the view's own address, without a mod.)
+    const ticket = ++this.loads;
+    if (this.at !== this.base) await this.goTo(this.base, ticket);
     return new Promise((resolve, reject) => {
       this.debugging = { resolve, reject };
       this.frame.post({ type: "scmjs.view.debug", map: map.slice() });
@@ -207,6 +256,7 @@ export class ViewBridge implements ScmSimView {
     this.debugging?.reject(new Error(this.words.closed));
     this.debugging = null;
     this.looksWaiting.length = 0;
+    for (const w of this.readyAgain.splice(0)) w(null);
     this.errors.clear(); this.shown.clear();
     this.frames.clear(); this.cameras.clear(); this.keys.clear(); this.units.clear(); this.hovers.clear(); this.wheels.clear(); this.pointers.clear();
     this.frame.remove();
@@ -227,6 +277,8 @@ export function domViewFrames(origin: string): ViewFrameHost {
     element.append(frame);
     return {
       post: (message) => frame.contentWindow?.postMessage(message, origin),
+      // (The same frame, its page loaded at the new address: its window, and so the listener above, stay the same.)
+      go: (to) => { frame.src = to; },
       remove: () => { window.removeEventListener("message", listener); frame.remove(); },
     };
   };

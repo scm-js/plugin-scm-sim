@@ -21,3 +21,25 @@ export function simAddress(at: { origin: string; hostname: string; pathname: str
   if (!site && !local) return null;
   return { origin: at.origin, play: `${at.origin}/play/`, analyse: `${at.origin}/play/analyse.html`, view: `${at.origin}/play/?view` };
 }
+
+/** What of a replay's data set (`ReplayDataSet`) the page's address names. */
+interface AddressedMod { hash: string; live?: boolean }
+
+/**
+ * The view's address for a replay played with `dataSet` (0.17.0): `?view` for the game's own data (none, null, or a
+ * data set without a hash), `?view&mod=<hash>` for a mod, and `&lift=live` beside it when the mod's code ran (`live`).
+ * The view plays the mod its address names and never switches to another; a page from before ignores what it does
+ * not know.
+ */
+export function viewAddress(view: string, dataSet?: AddressedMod | null): string {
+  if (!dataSet || !/^[0-9a-f]{16}$/.test(dataSet.hash)) return view;
+  return `${view}&mod=${dataSet.hash}${dataSet.live === true ? "&lift=live" : ""}`;
+}
+
+/** The play page's address for a replay of a mod whose code ran (`live`): `?lift=live` added; otherwise as it is. */
+export function playAddress(play: string, live: boolean): string {
+  if (!live) return play;
+  const url = new URL(play);
+  url.searchParams.set("lift", "live");
+  return url.href;
+}

@@ -8,12 +8,14 @@ const element = {} as HTMLElement;
 /** A stand-in for the play page's viewer: what it was sent, and a way to speak as it. */
 function fakeViewer(ready: object | null = { type: "scmjs.view.ready", version: 1, files: "copy" }) {
   const sent: { type: string; [k: string]: unknown }[] = [];
-  const page = { sent, removed: 0, inside: null as HTMLElement | null, say: (_m: object) => {} };
-  const host: ViewFrameHost = (_url, el, heard) => {
+  const page = { sent, removed: 0, inside: null as HTMLElement | null, say: (_m: object) => {}, at: [] as string[] };
+  const host: ViewFrameHost = (url, el, heard) => {
     page.inside = el;
     page.say = heard;
+    page.at.push(url);
     if (ready) queueMicrotask(() => heard(ready));
-    return { post: (m) => { sent.push(m as typeof sent[number]); }, remove: () => { page.removed++; } };
+    // (Pointed elsewhere, the page loads there and says ready again.)
+    return { post: (m) => { sent.push(m as typeof sent[number]); }, go: (to) => { page.at.push(to); if (ready) queueMicrotask(() => heard(ready)); }, remove: () => { page.removed++; } };
   };
   return { page, host };
 }
@@ -59,9 +61,12 @@ describe("the game view inside an element", () => {
     const yes = fakeViewer();
     const view = new ViewBridge("u", element, yes.host, WORDS);
     expect(yes.page.inside).toBe(element);
-    expect(await view.ready).toEqual({ files: "copy", reason: null });
+    expect(await view.ready).toEqual({ files: "copy", reason: null, features: [] });
     const no = fakeViewer({ type: "scmjs.view.ready", version: 1, files: null, why: "install it" });
-    expect(await new ViewBridge("u", element, no.host, WORDS).ready).toEqual({ files: null, reason: "install it" });
+    expect(await new ViewBridge("u", element, no.host, WORDS).ready).toEqual({ files: null, reason: "install it", features: [] });
+    // (scm-sim from R2b says what it does: the names alone are kept.)
+    const said = fakeViewer({ type: "scmjs.view.ready", version: 1, files: "copy", features: ["replayDoor", "liveSwitch", 3] });
+    expect((await new ViewBridge("u", element, said.host, WORDS).ready).features).toEqual(["replayDoor", "liveSwitch"]);
     const silent = fakeViewer(null);
     expect(await new ViewBridge("u", element, silent.host, WORDS, 5).ready).toEqual({ files: null, reason: "no answer" });
   });
@@ -97,6 +102,69 @@ describe("the game view inside an element", () => {
     await expect(second).resolves.toMatchObject({ frames: 900 });
     const none = fakeViewer({ type: "scmjs.view.ready", files: null, why: "install it" });
     await expect(new ViewBridge("u", element, none.host, WORDS).load(new Uint8Array(1))).rejects.toThrow("install it");
+  });
+
+  it("loads a mod's replay at the address that plays it, and goes back for one without (0.17.0)", async () => {
+    const { page, host } = fakeViewer({ type: "scmjs.view.ready", version: 1, debug: 1, files: "copy", features: ["replayDoor", "liveSwitch"] });
+    const view = new ViewBridge("https://scmjs.dev/play/?view", element, host, WORDS);
+    const live = { hash: "ac3f86533e4b5a31", name: "Cosmonarchy", live: true };
+    const first = view.load(new Uint8Array([1]), "c.rep", live);
+    await tick(); await tick();
+    expect(page.at).toEqual(["https://scmjs.dev/play/?view", "https://scmjs.dev/play/?view&mod=ac3f86533e4b5a31&lift=live"]);
+    expect(page.sent.map((m) => m.type)).toEqual(["scmjs.view.load"]);
+    page.say(LOADED);
+    await expect(first).resolves.toMatchObject({ frames: 900 });
+    // the same mod: the frame stays where it is
+    const again = view.load(new Uint8Array([2]), "c.rep", { ...live });
+    await tick();
+    page.say(LOADED);
+    await again;
+    expect(page.at).toHaveLength(2);
+    // without its plugins' code (no `live`), then the game's own data, then a debugged run: each at its address
+    const plain = view.load(new Uint8Array([3]), "p.rep", { hash: "ac3f86533e4b5a31" });
+    await tick(); await tick();
+    page.say(LOADED);
+    await plain;
+    const own = view.load(new Uint8Array([4]), "o.rep", null);
+    await tick(); await tick();
+    page.say(LOADED);
+    await own;
+    const bad = view.load(new Uint8Array([5]), "b.rep", { hash: "not a hash", live: true });
+    await tick();
+    page.say(LOADED);
+    await bad;
+    expect(page.at.slice(2)).toEqual(["https://scmjs.dev/play/?view&mod=ac3f86533e4b5a31", "https://scmjs.dev/play/?view"]);
+    const left = view.load(new Uint8Array([6]), "c.rep", live);
+    await tick(); await tick();
+    expect(page.at.at(-1)).toBe("https://scmjs.dev/play/?view&mod=ac3f86533e4b5a31&lift=live");
+    // (the load still waiting is replaced by the debugged run: its rejection is expected before it happens, as a caller
+    // awaiting it would have its handler on; left until later, Node reports the rejection as unhandled)
+    const leftReplaced = expect(left).rejects.toThrow("replaced");
+    const debugged = view.debug(new Uint8Array([7]));
+    await tick(); await tick();
+    expect(page.at.at(-1)).toBe("https://scmjs.dev/play/?view");
+    expect(page.sent.at(-1)?.type).toBe("scmjs.view.debug");
+    page.say({ type: "scmjs.view.debugged", map: { width: 64, height: 64 } });
+    await debugged;
+    await leftReplaced;
+  });
+
+  it("rejects a mod's load replaced while the page loaded at its address, or that the page did not answer there", async () => {
+    const { page, host } = fakeViewer();
+    const view = new ViewBridge("u", element, host, WORDS);
+    const first = view.load(new Uint8Array([1]), "a.rep", { hash: "ac3f86533e4b5a31", live: true });
+    const second = view.load(new Uint8Array([2]), "b.rep");
+    await expect(first).rejects.toThrow("replaced");
+    await tick(); await tick();
+    expect(page.sent.map((m) => m.name)).toEqual(["b.rep"]);
+    page.say(LOADED);
+    await expect(second).resolves.toMatchObject({ frames: 900 });
+    // a page that says nothing at its new address
+    let heard: (d: unknown) => void = () => {};
+    const quiet: ViewFrameHost = (_u, _e, h) => { heard = h; queueMicrotask(() => h({ type: "scmjs.view.ready", files: "copy" })); return { post: () => {}, go: () => {}, remove: () => {} }; };
+    const view2 = new ViewBridge("u", element, quiet, WORDS, 5);
+    await expect(view2.load(new Uint8Array([1]), "a.rep", { hash: "ac3f86533e4b5a31" })).rejects.toThrow("no answer");
+    void heard;
   });
 
   it("drives the page, and answers options with the looks the page says", async () => {

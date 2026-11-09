@@ -2,7 +2,8 @@
  * A map handed to the site's play page (scm-sim `web/handoff.ts`), which runs it in a
  * tab of its own:
  *
- *   ← `{ type: "scmjs.play.ready" }`                       the play page, each time it loads
+ *   ← `{ type: "scmjs.play.ready", features? }`            the play page, each time it loads (`features`: what it does that a
+ *                                                         page from before did not, from scm-sim's R2b: "replayDoor", "liveSwitch")
  *   → `{ type: "scmjs.play", map, name, useMapSettings, race, slot?, computers, setup, dataSet? }`
  *                                                         a whole .scm / .scx file, and how to play it (`src/settings.ts`);
  *                                                         `dataSet` `{ id, name, hash }` when the editor makes the map
@@ -16,7 +17,10 @@
  *                                                         page's Watch Replay menu open to play on from there; `dataSet`
  *                                                         `{ hash, name?, url?, files? }` the mod it was played with when
  *                                                         the file does not say (the page reads a replay's own `SCMJ`
- *                                                         tag first), `null` the game's own data
+ *                                                         tag first), `null` the game's own data; `live` (0.17.0) the mod's
+ *                                                         code ran (its plugins, or its FireGraft project's exe edits): the
+ *                                                         tab is opened at `/play/?lift=live`, and one open without it is
+ *                                                         pointed there, so the page need not load itself again for it
  *
  * "Ready" comes again when the play page starts over (a first visit takes the game's
  * files and reloads), and the map is handed over again each time, for as long as that
@@ -24,8 +28,9 @@
  * settings plays every map with its own settings and says "started".
  */
 import type { LiveFile, LiveTest, ReplayDataSet } from "../contract";
-import type { SimAddress } from "./address";
+import { playAddress, type SimAddress } from "./address";
 import { LiveLink, type LiveWords } from "./live";
+import { featuresOf } from "./features";
 import type { PlayHow } from "./settings";
 
 /** The window's name: one tab for playing, found again by the next call. (The scmjs.dev plugin's Test Map in Browser uses the same.) */
@@ -51,6 +56,8 @@ export class PlayTab {
   /** What the tab is handed each time it says ready: a map and how to play it, or a replay and where to stand in it. */
   private handing: { bytes: Uint8Array | null; name: string; how: PlayHow; dataSet?: PlayDataSet } | { replay: Uint8Array; name: string; frame: number; player?: number; dataSet?: ReplayDataSet | null } | null = null;
   private ready = false;
+  /** What the page's last `ready` said it does (`features`; none from a page before scm-sim's R2b). */
+  private said: string[] = [];
   private waiting: { resolve(outcome: PlayOutcome): void; reject(e: Error): void } | null = null;
   private readonly address: SimAddress;
   private readonly words: PlayWords;
@@ -60,7 +67,7 @@ export class PlayTab {
     if (!m || typeof m.type !== "string") return;
     if (this.live.heard(m as Record<string, unknown>)) return;
     // (Ready again is the page loaded again: what it was asked before is not coming.)
-    if (m.type === "scmjs.play.ready") { this.live.gone(); this.ready = true; this.hand(); }
+    if (m.type === "scmjs.play.ready") { this.live.gone(); this.ready = true; this.said = featuresOf((m as { features?: unknown }).features); this.hand(); }
     else if (m.type === "scmjs.play.started" || m.type === "scmjs.play.shown") { this.waiting?.resolve(m.type === "scmjs.play.shown" ? "shown" : "started"); this.waiting = null; }
     else if (m.type === "scmjs.play.error") { this.waiting?.reject(new Error(String(m.message ?? ""))); this.waiting = null; }
   };
@@ -80,6 +87,8 @@ export class PlayTab {
 
   /** Whether the play page's tab is open and has said it is ready. */
   isOpen(): boolean { return !!this.tab && !this.tab.closed && this.ready; }
+  /** What the tab's page said it does when it was last ready (`features`): none with no tab, or from a page before them. */
+  features(): string[] { return this.isOpen() ? [...this.said] : []; }
 
   private hand() {
     const h = this.handing;
@@ -94,11 +103,23 @@ export class PlayTab {
     }
   }
 
-  /** Opens the tab (now: from the click) or brings it forward; false when the browser would not open one. */
-  private open(): boolean {
+  /**
+   * Opens the tab (now: from the click) or brings it forward; false when the browser would not open one. `live`: the
+   * page with `?lift=live` (a replay of a mod whose code ran): a tab open without it is pointed there, its other
+   * parameters kept, and says ready again from there.
+   */
+  private open(live = false): boolean {
     const reuse = this.tab !== null && !this.tab.closed;
-    if (!reuse) { this.ready = false; this.tab = window.open(this.address.play, TAB); }
-    else this.tab!.focus();
+    if (!reuse) { this.ready = false; this.tab = window.open(playAddress(this.address.play, live), TAB); }
+    else {
+      if (live) {
+        // (The tab is of this origin: its address can be read. One that cannot be is left as it is: the page loads itself again.)
+        let href: string | null = null;
+        try { href = this.tab!.location.href; } catch { /* another origin by now */ }
+        if (href && href.startsWith(this.address.origin) && new URL(href).searchParams.get("lift") !== "live") { this.ready = false; this.tab!.location.replace(playAddress(href, true)); }
+      }
+      this.tab!.focus();
+    }
     return this.tab !== null;
   }
 
@@ -137,7 +158,7 @@ export class PlayTab {
    * (`validReplayDataSet`). Call it from a click: the tab is opened first.
    */
   async playReplay(replay: { bytes: Uint8Array; name: string; dataSet?: ReplayDataSet | null }, at: { frame: number; player?: number }): Promise<PlayOutcome> {
-    if (!this.open()) throw new Error(this.words.blocked);
+    if (!this.open(replay.dataSet?.live === true)) throw new Error(this.words.blocked);
     // (null: the game's own data, said; a data set the page could not use: left out, as from an editor before 0.16.0)
     const valid = replay.dataSet === null ? null : validReplayDataSet(replay.dataSet);
     const dataSet = replay.dataSet === null ? { dataSet: null } : valid ? { dataSet: valid } : {};
@@ -155,11 +176,11 @@ function pageDataSet<T extends { files?: LiveFile[] }>(d: T): Omit<T, "files"> &
 
 /**
  * The mod a replay was played with, as the page is told it (0.16.0): a hash of 16 hex digits, or files to keep; a name
- * and a web address when they are text. Null when it names nothing the page could use.
+ * and a web address when they are text; `live` when it is true (0.17.0). Null when it names nothing the page could use.
  */
 export function validReplayDataSet(set: unknown): ReplayDataSet | null {
   if (!set || typeof set !== "object") return null;
-  const { hash, name, url, files } = set as Record<string, unknown>;
+  const { hash, name, url, files, live } = set as Record<string, unknown>;
   const good = typeof hash === "string" && /^[0-9a-f]{16}$/.test(hash) ? hash : "";
   const kept = Array.isArray(files) ? (files as { path?: unknown; bytes?: unknown }[]).filter((f): f is LiveFile => !!f && typeof f.path === "string" && !!f.path && f.bytes instanceof Uint8Array) : [];
   if (!good && !kept.length) return null;
@@ -168,6 +189,7 @@ export function validReplayDataSet(set: unknown): ReplayDataSet | null {
     ...(typeof name === "string" && name.trim() ? { name: name.trim() } : {}),
     ...(typeof url === "string" && /^https?:\/\/\S+$/i.test(url) ? { url } : {}),
     ...(kept.length ? { files: kept } : {}),
+    ...(live === true ? { live: true } : {}),
   };
 }
 

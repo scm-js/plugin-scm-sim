@@ -119,6 +119,11 @@ below says what to check before offering one.
 Asks the engine whether it can run a game now. `available` is false, with a `reason` in
 words, when the browser has no copy of StarCraft or the engine's page did not answer.
 
+`features` (since 0.17.0) lists what the site's play page does that a page from before did
+not, as its pages say it: `"replayDoor"` (a replay's mod is read from the file and played,
+switched to or asked for) and `"liveSwitch"` (a replay of a mod whose code ran loads the page
+again with `?lift=live` instead of refusing). It is empty for an older page.
+
 ### `analyse(replay, options?)`
 
 `replay` is a whole `.rep` file. A twenty-minute game takes about ten to fifteen seconds. One
@@ -185,6 +190,15 @@ matters for a replay whose file does not say. The page then:
 A mod of the same name kept under another hash is refused, with both hashes: the replay is
 never played with other files than its own. `null` means the game's own data. A play page
 from before 0.16.0 ignores the field.
+
+`replay.dataSet.live` (since 0.17.0) says the mod's code ran in the replay's game: its
+plugins ran, or its FireGraft project's exe edits were written. The play page runs those only
+with `?lift=live` in its address, so the tab opens there (a tab already open without it is
+sent there first, its other parameters kept). For a replay saved on the play page, set it when
+the `SCMJ` tag's `plugins` is not empty, or when it names a `firegraft` project and its
+`engine.lifter` is not `"shipped"`. A play page from scm-sim's R2b on also loads itself again
+with `?lift=live` when a replay needs it and `live` was not said; an older one refuses in a
+sentence.
 
 Call it from the click that asks for it.
 
@@ -316,8 +330,9 @@ game does not restart when the person switches to the map and back.
 
 ```ts
 const view = sim.view(element);
-const ready = await view.ready;              // { files, reason }: reason says why when files is null
+const ready = await view.ready;              // { files, reason, features }: reason says why when files is null
 const replay = await view.load(bytes, "game.rep");   // paused at frame 0
+const modded = await view.load(bytes, "mod.rep", { hash: "ac3f86533e4b5a31", live: true });   // a mod's replay (0.17.0)
 view.speed(4); view.play(true);
 view.onFrame(({ frame, playing }) => timeline.move(frame));
 view.onCamera(({ x, y, byUser }) => { if (byUser) stopFollowing(); });
@@ -325,6 +340,13 @@ view.seek(12000);                            // quick backwards too, when replay
 await view.options({ remastered: true, lighting: false, fog: false });
 view.dispose();
 ```
+
+A replay of a mod (since 0.17.0): pass the mod as `load`'s third argument, as `playReplay`
+takes it (`hash` and `live` are used). The view's page plays a mod only when its address names
+it, and never switches to another, so the view loads at `?view&mod=<hash>` (with
+`&lift=live` when `live`) before the replay goes in, and back at `?view` for a replay with no
+mod. The page plays the mod it keeps under that hash and rejects the load in a sentence when
+the browser has not got it. Older pages ignore the mod.
 
 The rest of the view, in short (`contract.d.ts` has the details):
 

@@ -22,11 +22,14 @@ const tick = () => new Promise<void>((r) => setTimeout(r, 0));
 describe("the conversation with the engine's page", () => {
   it("says whether a game can be run, from what the page says of the game's files", async () => {
     const yes = fakePage();
-    expect(await new Bridge("u", yes.host, WORDS).status()).toEqual({ available: true, files: "copy", reason: null, timeline: 1, pathing: null, measure: null, tests: null, copies: null, debug: null, fights: null });
+    expect(await new Bridge("u", yes.host, WORDS).status()).toEqual({ available: true, files: "copy", reason: null, timeline: 1, pathing: null, measure: null, tests: null, copies: null, debug: null, fights: null, features: [] });
     const no = fakePage({ type: "scmjs.sim.ready", version: 1, files: null, why: "install it" });
-    expect(await new Bridge("u", no.host, WORDS).status()).toEqual({ available: false, files: null, reason: "install it", timeline: 1, pathing: null, measure: null, tests: null, copies: null, debug: null, fights: null });
+    expect(await new Bridge("u", no.host, WORDS).status()).toEqual({ available: false, files: null, reason: "install it", timeline: 1, pathing: null, measure: null, tests: null, copies: null, debug: null, fights: null, features: [] });
     const newer = fakePage({ type: "scmjs.sim.ready", version: 4, pathing: 1, files: "copy" });
     expect(await new Bridge("u", newer.host, WORDS).status()).toMatchObject({ available: true, timeline: 4, pathing: 1 });
+    // (scm-sim from R2b says what its pages do)
+    const said = fakePage({ type: "scmjs.sim.ready", version: 4, files: "copy", features: ["replayDoor", "liveSwitch"] });
+    expect((await new Bridge("u", said.host, WORDS).status()).features).toEqual(["replayDoor", "liveSwitch"]);
   });
 
   it("gives up on a page that never answers, and asks again the next time", async () => {
