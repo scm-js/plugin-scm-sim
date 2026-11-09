@@ -3,9 +3,11 @@
  * plugin frames out of sight:
  *
  *   ← `{ type: "scmjs.sim.ready", version, files, why? }`            the page, once it has looked for the game's files
- *   → `{ type: "scmjs.sim.analyse", id, replay, name?, options? }`   a whole .rep file's bytes
+ *   → `{ type: "scmjs.sim.analyse", id, replay, name?, options? }`   a whole .rep file's bytes; `options.dataSet`
+ *                                                                   (0.18.0) the mod it was played with: `{ hash, name?,
+ *                                                                   url?, live? }`, a page whose `ready` says "modAnalysis"
  *   ← `{ type: "scmjs.sim.progress", id, stage, frame, frames }`
- *   ← `{ type: "scmjs.sim.result", id, timeline }`
+ *   ← `{ type: "scmjs.sim.result", id, timeline }`                 `timeline.mod`: the mod it played with
  *   ← `{ type: "scmjs.sim.error", id, message }`
  *   → `{ type: "scmjs.sim.cancel", id }`
  *   → `{ type: "scmjs.sim.pathing", id, chk, options? }`            a map's pathing (a page from scm-sim 0.7.0 on,
@@ -29,14 +31,28 @@
  *   → `{ type: "scmjs.sim.cancel", id }`                            with a session's id: the session is over
  *   → `{ type: "scmjs.sim.fights", id, replay, fights, options? }` a replay's fights played again (a page whose
  *                                                                   `ready` says `fights`); progress `playing`
- *   ← `{ type: "scmjs.sim.fought", id, result }`
+ *   ← `{ type: "scmjs.sim.fought", id, result }`                   `options.dataSet` and `result.mod` as for a replay
  *
  * The frame is made on the first call and kept; `status()` loads it afresh, since the
  * page looks for the game's files once, when it loads. Nothing here touches the DOM
  * directly: the frame is behind `FrameHost`, so the conversation is tested without one.
  */
-import type { FightAsk, FightsOptions, FightsProgress, FightsResult, ScmSimDebugSession, ScmSimPicture, AnalyseOptions, MeasureOptions, MeasureProgress, MeasureResult, PathingOptions, PathingProgress, PathingResult, ReplayTimeline, ScmSimStatus, TestCopiesOptions, TestCopyResult, TestRunOptions } from "../contract";
+import type { FightAsk, FightsOptions, FightsProgress, FightsResult, ScmSimDebugSession, ScmSimPicture, AnalyseOptions, MeasureOptions, MeasureProgress, MeasureResult, PathingOptions, PathingProgress, PathingResult, ReplayDataSet, ReplayTimeline, ScmSimStatus, TestCopiesOptions, TestCopyResult, TestRunOptions } from "../contract";
 import { featuresOf } from "./features";
+
+/**
+ * The mod a replay was played with, as the analysis page is told it (0.18.0): its hash, name, makers' page and `live`,
+ * never its files (the page plays the mod the browser keeps); null for none, a hash that is not 16 hex digits included.
+ */
+export function analysedDataSet(set: ReplayDataSet | null | undefined): { hash: string; name?: string; url?: string; live?: true } | null {
+  if (!set || typeof set.hash !== "string" || !/^[0-9a-f]{16}$/.test(set.hash)) return null;
+  return {
+    hash: set.hash,
+    ...(typeof set.name === "string" && set.name.trim() ? { name: set.name.trim() } : {}),
+    ...(typeof set.url === "string" && /^https?:\/\/\S+$/i.test(set.url) ? { url: set.url } : {}),
+    ...(set.live === true ? { live: true as const } : {}),
+  };
+}
 
 export interface Frame {
   post(message: object): void;
@@ -144,7 +160,7 @@ export class Bridge {
   async analyse(replay: Uint8Array, options: AnalyseOptions = {}): Promise<ReplayTimeline> {
     const progress = options.onProgress && ((m: Heard) => options.onProgress!({ stage: m.stage === "playing" ? "playing" : "starting", frame: Number(m.frame) || 0, frames: Number(m.frames) || 0 }));
     // (A copy: the caller keeps its bytes.)
-    return this.ask<ReplayTimeline>(options.signal, progress, (id) => ({ type: "scmjs.sim.analyse", id, replay: replay.slice(), name: options.name, options: { sampleEvery: options.sampleEvery, positionsEvery: options.positionsEvery } }));
+    return this.ask<ReplayTimeline>(options.signal, progress, (id) => ({ type: "scmjs.sim.analyse", id, replay: replay.slice(), name: options.name, options: { sampleEvery: options.sampleEvery, positionsEvery: options.positionsEvery, ...withDataSet(options.dataSet) } }));
   }
 
   /** A map's pathing: `scenario` is the bare scenario (.chk bytes). */
@@ -201,9 +217,9 @@ export class Bridge {
 
   /** A replay's fights played again: `replay` is a whole .rep file. */
   async fights(replay: Uint8Array, fights: FightAsk[], options: FightsOptions = {}): Promise<FightsResult> {
-    const { signal, onProgress, ...asked } = options;
+    const { signal, onProgress, dataSet, ...asked } = options;
     const progress = onProgress && ((m: Heard) => onProgress({ stage: m.stage === "playing" ? "playing" : "starting", frame: Number(m.frame) || 0, frames: Number(m.frames) || 0 } satisfies FightsProgress));
-    return this.ask<FightsResult>(signal, progress, (id) => ({ type: "scmjs.sim.fights", id, replay: replay.slice(), fights, options: asked }), (r) => (r.fights === null ? this.words.noFights : null));
+    return this.ask<FightsResult>(signal, progress, (id) => ({ type: "scmjs.sim.fights", id, replay: replay.slice(), fights, options: { ...asked, ...withDataSet(dataSet) } }), (r) => (r.fights === null ? this.words.noFights : null));
   }
 
   /** One request to the page: `message` with its id, answered by a result, an error, or a cancel when `signal` aborts. */
@@ -248,4 +264,10 @@ export function domFrames(origin: string): FrameHost {
       remove: () => { window.removeEventListener("message", listener); frame.remove(); },
     };
   };
+}
+
+/** `{ dataSet }` for a request's options when there is a mod to name, else nothing (the options as before 0.18.0). */
+function withDataSet(set: ReplayDataSet | null | undefined): { dataSet?: NonNullable<ReturnType<typeof analysedDataSet>> } {
+  const d = analysedDataSet(set);
+  return d ? { dataSet: d } : {};
 }
