@@ -7,6 +7,19 @@ function simAddress(at) {
   if (!site && !local) return null;
   return { origin: at.origin, play: `${at.origin}/play/`, analyse: `${at.origin}/play/analyse.html`, view: `${at.origin}/play/?view` };
 }
+function viewAddress(view, dataSet) {
+  if (!dataSet || !/^[0-9a-f]{16}$/.test(dataSet.hash)) return view;
+  return `${view}&mod=${dataSet.hash}${dataSet.live === true ? "&lift=live" : ""}`;
+}
+function playAddress(play, live) {
+  if (!live) return play;
+  const url = new URL(play);
+  url.searchParams.set("lift", "live");
+  return url.href;
+}
+
+// src/features.ts
+var featuresOf = (v) => Array.isArray(v) ? v.filter((f) => typeof f === "string") : [];
 
 // src/bridge.ts
 function abortError() {
@@ -44,7 +57,7 @@ var Bridge = class {
         if (m.type === "scmjs.sim.ready") {
           clearTimeout(timer);
           const files2 = m.files === "archives" || m.files === "copy" || m.files === "server" ? m.files : null;
-          resolve({ version: typeof m.version === "number" ? m.version : null, pathing: typeof m.pathing === "number" ? m.pathing : null, measure: typeof m.measure === "number" ? m.measure : null, tests: typeof m.tests === "number" ? m.tests : null, copies: typeof m.copies === "number" ? m.copies : null, debug: typeof m.debug === "number" ? m.debug : null, fights: typeof m.fights === "number" ? m.fights : null, files: files2, why: typeof m.why === "string" ? m.why : null });
+          resolve({ version: typeof m.version === "number" ? m.version : null, pathing: typeof m.pathing === "number" ? m.pathing : null, measure: typeof m.measure === "number" ? m.measure : null, tests: typeof m.tests === "number" ? m.tests : null, copies: typeof m.copies === "number" ? m.copies : null, debug: typeof m.debug === "number" ? m.debug : null, fights: typeof m.fights === "number" ? m.fights : null, files: files2, why: typeof m.why === "string" ? m.why : null, features: featuresOf(m.features) });
           return;
         }
         const p = typeof m.id === "number" ? this.pending.get(m.id) : void 0;
@@ -94,9 +107,9 @@ var Bridge = class {
     if (this.pending.size === 0 && !this.opening && this.sessions.size === 0) this.close();
     try {
       const r = await this.open();
-      return { available: r.files !== null, files: r.files, reason: r.files ? null : r.why ?? this.words.noFiles, timeline: r.version, pathing: r.pathing, measure: r.measure, tests: r.tests, copies: r.copies, debug: r.debug, fights: r.fights };
+      return { available: r.files !== null, files: r.files, reason: r.files ? null : r.why ?? this.words.noFiles, timeline: r.version, pathing: r.pathing, measure: r.measure, tests: r.tests, copies: r.copies, debug: r.debug, fights: r.fights, features: r.features };
     } catch (err) {
-      return { available: false, files: null, reason: err instanceof Error ? err.message : String(err), timeline: null, pathing: null, measure: null, tests: null, copies: null, debug: null, fights: null };
+      return { available: false, files: null, reason: err instanceof Error ? err.message : String(err), timeline: null, pathing: null, measure: null, tests: null, copies: null, debug: null, fights: null, features: [] };
     }
   }
   async analyse(replay, options = {}) {
@@ -239,8 +252,18 @@ var ViewBridge = class {
   wheels = /* @__PURE__ */ new Set();
   pointers = /* @__PURE__ */ new Set();
   closed = false;
+  /** The address the view's page was opened at (`?view`), and the one the frame stands at now (`viewAddress`). */
+  base;
+  at;
+  /** Waiting for the page's `ready` after the frame was pointed elsewhere. */
+  readyAgain = [];
+  /** Loads asked for, counted: one waiting for the page to load again is replaced by a later one. */
+  loads = 0;
+  readyMs;
   constructor(url, element, host, words, readyMs = 3e4) {
     this.words = words;
+    this.base = this.at = url;
+    this.readyMs = readyMs;
     let answered = () => {
     };
     this.ready = new Promise((resolve) => {
@@ -255,7 +278,9 @@ var ViewBridge = class {
           clearTimeout(timer);
           this.debugs = typeof m.debug === "number";
           const f = files(m.files);
-          answered({ files: f, reason: f ? null : typeof m.why === "string" && m.why ? m.why : words.noFiles });
+          const r = { files: f, reason: f ? null : typeof m.why === "string" && m.why ? m.why : words.noFiles, features: featuresOf(m.features) };
+          answered(r);
+          for (const w of this.readyAgain.splice(0)) w(r);
           return;
         }
         case "scmjs.view.loaded": {
@@ -340,15 +365,38 @@ var ViewBridge = class {
       }
     });
   }
-  async load(replay, name = "replay.rep") {
+  async load(replay, name = "replay.rep", dataSet) {
     const r = await this.ready;
     if (this.closed) throw new Error(this.words.closed);
     if (!r.files) throw new Error(r.reason ?? this.words.noFiles);
     this.loading?.reject(new Error(this.words.replaced));
+    this.loading = null;
+    const ticket = ++this.loads, at = viewAddress(this.base, dataSet);
+    if (at !== this.at) await this.goTo(at, ticket);
     return new Promise((resolve, reject) => {
       this.loading = { resolve, reject };
       this.frame.post({ type: "scmjs.view.load", replay: replay.slice(), name });
     });
+  }
+  /**
+   * Points the frame at `at` when it stands elsewhere and waits for the page there to say ready; rejects when a later
+   * request came meanwhile, the view was closed, or the page did not answer or has no game files.
+   */
+  async goTo(at, ticket) {
+    this.at = at;
+    const again = new Promise((resolve) => {
+      const timer = setTimeout(() => resolve(null), this.readyMs);
+      this.readyAgain.push((r2) => {
+        clearTimeout(timer);
+        resolve(r2);
+      });
+    });
+    this.frame.go(at);
+    const r = await again;
+    if (this.closed) throw new Error(this.words.closed);
+    if (ticket !== this.loads) throw new Error(this.words.replaced);
+    if (!r) throw new Error(this.words.noAnswer);
+    if (!r.files) throw new Error(r.reason ?? this.words.noFiles);
   }
   /**
    * A debugged run's built map (TrigScript 4, A5), started as the engine's page started it for the record: the view
@@ -363,6 +411,9 @@ var ViewBridge = class {
     this.loading?.reject(new Error(this.words.replaced));
     this.loading = null;
     this.debugging?.reject(new Error(this.words.replaced));
+    this.debugging = null;
+    const ticket = ++this.loads;
+    if (this.at !== this.base) await this.goTo(this.base, ticket);
     return new Promise((resolve, reject) => {
       this.debugging = { resolve, reject };
       this.frame.post({ type: "scmjs.view.debug", map: map.slice() });
@@ -443,6 +494,7 @@ var ViewBridge = class {
     this.debugging?.reject(new Error(this.words.closed));
     this.debugging = null;
     this.looksWaiting.length = 0;
+    for (const w of this.readyAgain.splice(0)) w(null);
     this.errors.clear();
     this.shown.clear();
     this.frames.clear();
@@ -469,6 +521,10 @@ function domViewFrames(origin) {
     element.append(frame);
     return {
       post: (message) => frame.contentWindow?.postMessage(message, origin),
+      // (The same frame, its page loaded at the new address: its window, and so the listener above, stay the same.)
+      go: (to) => {
+        frame.src = to;
+      },
       remove: () => {
         window.removeEventListener("message", listener);
         frame.remove();
@@ -1104,6 +1160,8 @@ var PlayTab = class {
   /** What the tab is handed each time it says ready: a map and how to play it, or a replay and where to stand in it. */
   handing = null;
   ready = false;
+  /** What the page's last `ready` said it does (`features`; none from a page before scm-sim's R2b). */
+  said = [];
   waiting = null;
   address;
   words;
@@ -1115,6 +1173,7 @@ var PlayTab = class {
     if (m.type === "scmjs.play.ready") {
       this.live.gone();
       this.ready = true;
+      this.said = featuresOf(m.features);
       this.hand();
     } else if (m.type === "scmjs.play.started" || m.type === "scmjs.play.shown") {
       this.waiting?.resolve(m.type === "scmjs.play.shown" ? "shown" : "started");
@@ -1140,6 +1199,10 @@ var PlayTab = class {
   isOpen() {
     return !!this.tab && !this.tab.closed && this.ready;
   }
+  /** What the tab's page said it does when it was last ready (`features`): none with no tab, or from a page before them. */
+  features() {
+    return this.isOpen() ? [...this.said] : [];
+  }
   hand() {
     const h = this.handing;
     if (!this.tab || this.tab.closed || !h || !this.ready) return;
@@ -1151,13 +1214,30 @@ var PlayTab = class {
       this.tab.postMessage({ type: "scmjs.play", ...h.bytes ? { map: h.bytes.slice() } : {}, name: h.name, ...h.how, ...dataSet ? { dataSet } : {} }, this.address.origin);
     }
   }
-  /** Opens the tab (now: from the click) or brings it forward; false when the browser would not open one. */
-  open() {
+  /**
+   * Opens the tab (now: from the click) or brings it forward; false when the browser would not open one. `live`: the
+   * page with `?lift=live` (a replay of a mod whose code ran): a tab open without it is pointed there, its other
+   * parameters kept, and says ready again from there.
+   */
+  open(live = false) {
     const reuse = this.tab !== null && !this.tab.closed;
     if (!reuse) {
       this.ready = false;
-      this.tab = window.open(this.address.play, TAB);
-    } else this.tab.focus();
+      this.tab = window.open(playAddress(this.address.play, live), TAB);
+    } else {
+      if (live) {
+        let href = null;
+        try {
+          href = this.tab.location.href;
+        } catch {
+        }
+        if (href && href.startsWith(this.address.origin) && new URL(href).searchParams.get("lift") !== "live") {
+          this.ready = false;
+          this.tab.location.replace(playAddress(href, true));
+        }
+      }
+      this.tab.focus();
+    }
     return this.tab !== null;
   }
   handOver() {
@@ -1194,7 +1274,7 @@ var PlayTab = class {
    * (`validReplayDataSet`). Call it from a click: the tab is opened first.
    */
   async playReplay(replay, at) {
-    if (!this.open()) throw new Error(this.words.blocked);
+    if (!this.open(replay.dataSet?.live === true)) throw new Error(this.words.blocked);
     const valid = replay.dataSet === null ? null : validReplayDataSet(replay.dataSet);
     const dataSet = replay.dataSet === null ? { dataSet: null } : valid ? { dataSet: valid } : {};
     this.handing = { replay: replay.bytes, name: replay.name, frame: Math.max(0, Math.floor(at.frame)), ...at.player !== void 0 ? { player: at.player } : {}, ...dataSet };
@@ -1211,7 +1291,7 @@ function pageDataSet(d) {
 }
 function validReplayDataSet(set) {
   if (!set || typeof set !== "object") return null;
-  const { hash, name, url, files: files2 } = set;
+  const { hash, name, url, files: files2, live } = set;
   const good = typeof hash === "string" && /^[0-9a-f]{16}$/.test(hash) ? hash : "";
   const kept = Array.isArray(files2) ? files2.filter((f) => !!f && typeof f.path === "string" && !!f.path && f.bytes instanceof Uint8Array) : [];
   if (!good && !kept.length) return null;
@@ -1219,7 +1299,8 @@ function validReplayDataSet(set) {
     hash: good,
     ...typeof name === "string" && name.trim() ? { name: name.trim() } : {},
     ...typeof url === "string" && /^https?:\/\/\S+$/i.test(url) ? { url } : {},
-    ...kept.length ? { files: kept } : {}
+    ...kept.length ? { files: kept } : {},
+    ...live === true ? { live: true } : {}
   };
 }
 function validDataSet(set) {
@@ -1373,7 +1454,7 @@ function activate(api) {
   const views = /* @__PURE__ */ new Set();
   const service = {
     present: address !== null,
-    status: async () => bridge ? bridge.status() : { available: false, files: null, reason: absent().message, timeline: null, pathing: null, measure: null, tests: null, copies: null, debug: null, fights: null },
+    status: async () => bridge ? bridge.status() : { available: false, files: null, reason: absent().message, timeline: null, pathing: null, measure: null, tests: null, copies: null, debug: null, fights: null, features: [] },
     analyse: async (replay, options) => {
       if (!bridge) throw absent();
       return bridge.analyse(replay, options);
