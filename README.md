@@ -122,7 +122,9 @@ words, when the browser has no copy of StarCraft or the engine's page did not an
 `features` (since 0.17.0) lists what the site's play page does that a page from before did
 not, as its pages say it: `"replayDoor"` (a replay's mod is read from the file and played,
 switched to or asked for) and `"liveSwitch"` (a replay of a mod whose code ran loads the page
-again with `?lift=live` instead of refusing). It is empty for an older page.
+again with `?lift=live` instead of refusing). From the analysis page it can also hold
+`"modAnalysis"` (since 0.18.0): `analyse` and `fights` play a replay of a mod with that mod. It
+is empty for an older page.
 
 ### `analyse(replay, options?)`
 
@@ -144,6 +146,21 @@ The answer is a `ReplayTimeline`:
 
 `sampleEvery` and `positionsEvery` change the two intervals. `positionsEvery: 0` leaves the
 positions out.
+
+A replay of a mod (since 0.18.0, when `status().features` has `"modAnalysis"`): the engine
+plays it with the mod, as the play page does. A replay the play page saved names its mod
+itself, and the page reads that first. For one that does not, pass the mod as
+`options.dataSet`, the same `{ hash, name?, url?, live? }` that `playReplay` takes (`files` is
+never sent). The page plays it with the mod this browser keeps under that hash, which a
+person adds once on the play page (Game Menu ▸ Mods ▸ Add a Mod…), and runs the mod's
+plugins where the replay's game ran them. The timeline's `mod` then says what it played
+with: `{ hash, name, plugins, lifter }`, the plugins by file name in the order they loaded.
+When the browser has not got the mod, or keeps another version of it, the promise rejects
+with a sentence that names the mod, its hash and its makers' page. A replay of a mod whose
+plugins run takes about 17 seconds to start, then plays at 30 to 40 game frames a second (a
+twenty-minute game takes over ten minutes), and uses about 2 GB of memory, given back when
+the replay ends. A page from before 0.18.0's engine plays such a replay with the game's own
+files or refuses it, so check `features` first.
 
 A unit's number is the timeline's own. It is counted from 0 in the order units appear and
 stays with the unit for its whole life. When reading the events:
@@ -317,6 +334,11 @@ the fight was played, wherever it stood at the start. For each side you get:
 The replay is played once from its start and stops at each fight. That takes about as long
 as `analyse` takes to reach the last fight, plus a second or two per fight. Two fights late
 in a 22-minute game take about eleven seconds.
+
+A replay of a mod is played with its mod as `analyse` plays it (since 0.18.0): pass the same
+`options.dataSet`, and the answer's `mod` says what it played with. While the mod's plugins
+run, the page rejects `fights` in a sentence: playing a fight again puts the game back to an
+earlier moment, which the engine cannot do yet with a mod's plugins.
 
 ### `view(element)`
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { FightsResult, MeasureResult, PathingResult, ReplayTimeline } from "../contract";
-import { Bridge, type FrameHost } from "../src/bridge";
+import { analysedDataSet, Bridge, type FrameHost } from "../src/bridge";
 
 const WORDS = { noAnswer: "no answer", noFiles: "no files", closed: "closed", noPathing: "no pathing", noMeasure: "no measure", noTests: "no tests", noCopies: "no copies", noDebug: "no debug", sessionOver: "session over", noFights: "no fights" };
 const timeline = (frames: number) => ({ version: 1, frames } as ReplayTimeline);
@@ -241,6 +241,37 @@ describe("the conversation with the engine's page", () => {
     page.say({ type: "scmjs.sim.fought", id: asked.id, result: { version: 1, fights: [null] } as unknown as FightsResult });
     expect((await got).fights).toEqual([null]);
     expect(seen).toEqual(["playing 50/100"]);
+  });
+
+  it("names a replay's mod to the page (0.18.0): hash, name, url and live, never its files; the answer's mod comes back", async () => {
+    const { page, host } = fakePage({ type: "scmjs.sim.ready", version: 5, pathing: 1, measure: 1, fights: 1, files: "copy", features: ["replayDoor", "liveSwitch", "modAnalysis"] });
+    const bridge = new Bridge("u", host, WORDS);
+    expect((await bridge.status()).features).toContain("modAnalysis");
+    const dataSet = { hash: "ac3f86533e4b5a31", name: " Cosmonarchy BW ", url: "https://fraudsclub.com/cosmonarchy-bw/", live: true, files: [{ path: "arr/units.dat", bytes: new Uint8Array(9) }] };
+    const got = bridge.analyse(new Uint8Array([1]), { name: "c.rep", dataSet });
+    await tick();
+    const asked = page.sent[0];
+    expect(asked.options).toEqual({ sampleEvery: undefined, positionsEvery: undefined, dataSet: { hash: "ac3f86533e4b5a31", name: "Cosmonarchy BW", url: "https://fraudsclub.com/cosmonarchy-bw/", live: true } });
+    const mod = { hash: "ac3f86533e4b5a31", name: "Cosmonarchy BW", plugins: ["aise.qdp", "gptp.qdp", "isdbg.qdp", "mtl.qdp"], lifter: "lift-5" };
+    page.say({ type: "scmjs.sim.result", id: asked.id, timeline: { ...timeline(600), mod } });
+    expect((await got).mod).toEqual(mod);
+    const fought = bridge.fights(new Uint8Array([1]), [], { tail: 60, dataSet: { hash: "ac3f86533e4b5a31" } });
+    await tick();
+    const f = page.sent[1];
+    expect(f.options).toEqual({ tail: 60, dataSet: { hash: "ac3f86533e4b5a31" } });
+    page.say({ type: "scmjs.sim.fought", id: f.id, result: { version: 1, fights: [], mod } as unknown as FightsResult });
+    expect((await fought).mod).toEqual(mod);
+  });
+
+  it("sends no dataSet for none, null, or a hash that is not one", async () => {
+    const { page, host } = fakePage({ type: "scmjs.sim.ready", version: 5, fights: 1, files: "copy" });
+    const bridge = new Bridge("u", host, WORDS);
+    void bridge.analyse(new Uint8Array([1]), { dataSet: null });
+    void bridge.analyse(new Uint8Array([1]), { dataSet: { hash: "not a hash" } });
+    void bridge.fights(new Uint8Array([1]), [], {});
+    await tick();
+    expect(page.sent.map((m) => m.options)).toEqual([{ sampleEvery: undefined, positionsEvery: undefined }, { sampleEvery: undefined, positionsEvery: undefined }, {}]);
+    expect(analysedDataSet({ hash: "ac3f86533e4b5a31", url: "javascript:alert(1)", live: false })).toEqual({ hash: "ac3f86533e4b5a31" });
   });
 
   it("refuses fights on a page from before them, asking nothing", async () => {
