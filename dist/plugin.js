@@ -22,6 +22,15 @@ function playAddress(play, live) {
 var featuresOf = (v) => Array.isArray(v) ? v.filter((f) => typeof f === "string") : [];
 
 // src/bridge.ts
+function analysedDataSet(set) {
+  if (!set || typeof set.hash !== "string" || !/^[0-9a-f]{16}$/.test(set.hash)) return null;
+  return {
+    hash: set.hash,
+    ...typeof set.name === "string" && set.name.trim() ? { name: set.name.trim() } : {},
+    ...typeof set.url === "string" && /^https?:\/\/\S+$/i.test(set.url) ? { url: set.url } : {},
+    ...set.live === true ? { live: true } : {}
+  };
+}
 function abortError() {
   const e = new Error("The analysis was stopped.");
   e.name = "AbortError";
@@ -114,7 +123,7 @@ var Bridge = class {
   }
   async analyse(replay, options = {}) {
     const progress = options.onProgress && ((m) => options.onProgress({ stage: m.stage === "playing" ? "playing" : "starting", frame: Number(m.frame) || 0, frames: Number(m.frames) || 0 }));
-    return this.ask(options.signal, progress, (id) => ({ type: "scmjs.sim.analyse", id, replay: replay.slice(), name: options.name, options: { sampleEvery: options.sampleEvery, positionsEvery: options.positionsEvery } }));
+    return this.ask(options.signal, progress, (id) => ({ type: "scmjs.sim.analyse", id, replay: replay.slice(), name: options.name, options: { sampleEvery: options.sampleEvery, positionsEvery: options.positionsEvery, ...withDataSet(options.dataSet) } }));
   }
   /** A map's pathing: `scenario` is the bare scenario (.chk bytes). */
   async pathing(scenario, options = {}) {
@@ -170,9 +179,9 @@ var Bridge = class {
   }
   /** A replay's fights played again: `replay` is a whole .rep file. */
   async fights(replay, fights, options = {}) {
-    const { signal, onProgress, ...asked } = options;
+    const { signal, onProgress, dataSet, ...asked } = options;
     const progress = onProgress && ((m) => onProgress({ stage: m.stage === "playing" ? "playing" : "starting", frame: Number(m.frame) || 0, frames: Number(m.frames) || 0 }));
-    return this.ask(signal, progress, (id) => ({ type: "scmjs.sim.fights", id, replay: replay.slice(), fights, options: asked }), (r) => r.fights === null ? this.words.noFights : null);
+    return this.ask(signal, progress, (id) => ({ type: "scmjs.sim.fights", id, replay: replay.slice(), fights, options: { ...asked, ...withDataSet(dataSet) } }), (r) => r.fights === null ? this.words.noFights : null);
   }
   /** One request to the page: `message` with its id, answered by a result, an error, or a cancel when `signal` aborts. */
   async ask(signal, progress, message, refuse) {
@@ -228,6 +237,10 @@ function domFrames(origin) {
       }
     };
   };
+}
+function withDataSet(set) {
+  const d = analysedDataSet(set);
+  return d ? { dataSet: d } : {};
 }
 
 // src/view.ts
