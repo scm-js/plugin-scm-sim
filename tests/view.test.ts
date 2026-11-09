@@ -137,13 +137,16 @@ describe("the game view inside an element", () => {
     const left = view.load(new Uint8Array([6]), "c.rep", live);
     await tick(); await tick();
     expect(page.at.at(-1)).toBe("https://scmjs.dev/play/?view&mod=ac3f86533e4b5a31&lift=live");
+    // (the load still waiting is replaced by the debugged run: its rejection is expected before it happens, as a caller
+    // awaiting it would have its handler on; left until later, Node reports the rejection as unhandled)
+    const leftReplaced = expect(left).rejects.toThrow("replaced");
     const debugged = view.debug(new Uint8Array([7]));
     await tick(); await tick();
     expect(page.at.at(-1)).toBe("https://scmjs.dev/play/?view");
     expect(page.sent.at(-1)?.type).toBe("scmjs.view.debug");
     page.say({ type: "scmjs.view.debugged", map: { width: 64, height: 64 } });
     await debugged;
-    await expect(left).rejects.toThrow("replaced");
+    await leftReplaced;
   });
 
   it("rejects a mod's load replaced while the page loaded at its address, or that the page did not answer there", async () => {
