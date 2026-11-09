@@ -21,6 +21,133 @@ function playAddress(play, live) {
 // src/features.ts
 var featuresOf = (v) => Array.isArray(v) ? v.filter((f) => typeof f === "string") : [];
 
+// src/mods.ts
+var HASH = /^[0-9a-f]{16}$/;
+function pageModsOf(v) {
+  const m = v;
+  if (!m || typeof m !== "object" || !Array.isArray(m.kept)) return null;
+  return { kept: m.kept.filter((h) => typeof h === "string" && HASH.test(h)), plays: typeof m.plays === "string" && HASH.test(m.plays) ? m.plays : null };
+}
+var pageKeeps = (mods, hash) => !!mods && (mods.kept.includes(hash) || mods.plays === hash);
+var REASONS = ["mod-missing", "mod-terrain", "remastered-terrain"];
+function pageError(m) {
+  const e = new Error(String(m.message ?? ""));
+  if (typeof m.reason === "string" && REASONS.includes(m.reason)) e.reason = m.reason;
+  if (e.reason && typeof m.hash === "string" && HASH.test(m.hash)) e.hash = m.hash;
+  return e;
+}
+function asPageFiles(files2) {
+  return files2.flatMap((f) => {
+    if (!f || typeof f.path !== "string" || !f.path) return [];
+    const path = f.path.replace(/\\/g, "/");
+    if ("file" in f && typeof File !== "undefined" && f.file instanceof File) return [{ path, file: f.file }];
+    if ("bytes" in f && f.bytes instanceof Uint8Array && typeof File !== "undefined") return [{ path: path.toLowerCase(), file: new File([f.bytes], path.split("/").pop() || "file") }];
+    return [];
+  });
+}
+var ModSources = class {
+  /** Registered mods by hash; the one registered last is asked first. */
+  provided = /* @__PURE__ */ new Map();
+  /** Hashes a page has said it keeps, or that a page kept for us: every page of the site finds them. */
+  kept = /* @__PURE__ */ new Set();
+  /** A page keeping a hash now: the promise settles when it is done (kept or not). */
+  keeping = /* @__PURE__ */ new Map();
+  /** A mod's files, found by its hash from now until disposed. */
+  provide(hash, mod) {
+    if (!HASH.test(hash) || !mod || typeof mod.files !== "function") return { dispose: () => {
+    } };
+    const list = this.provided.get(hash) ?? [];
+    list.push(mod);
+    this.provided.set(hash, list);
+    return {
+      dispose: () => {
+        const now = this.provided.get(hash);
+        if (!now) return;
+        const i = now.indexOf(mod);
+        if (i >= 0) now.splice(i, 1);
+        if (!now.length) this.provided.delete(hash);
+      }
+    };
+  }
+  /** The mod registered for `hash` last, or null. */
+  registered(hash) {
+    return this.provided.get(hash)?.at(-1) ?? null;
+  }
+  /** Whether files can be found for `set`: its own, or a registered mod's. */
+  has(set) {
+    if (!set) return false;
+    const own = set.files;
+    if (typeof own === "function" || Array.isArray(own) && own.length) return true;
+    return HASH.test(set.hash) && this.provided.has(set.hash);
+  }
+  /** The files for `set`: the caller's own first (a list, or a source asked now), else the registered mod's. Null for none. */
+  async files(set) {
+    if (!set) return null;
+    const own = set.files;
+    if (typeof own === "function") {
+      const f2 = asPageFiles(await own());
+      return f2.length ? f2 : null;
+    }
+    if (Array.isArray(own) && own.length) {
+      const f2 = asPageFiles(own);
+      return f2.length ? f2 : null;
+    }
+    const mod = HASH.test(set.hash) ? this.registered(set.hash) : null;
+    if (!mod) return null;
+    const f = asPageFiles(await mod.files());
+    return f.length ? f : null;
+  }
+  /** What a page said it keeps. */
+  note(mods) {
+    if (mods) for (const h of mods.kept) this.kept.add(h);
+  }
+  /** A page kept `hash` (its answer came after the files went). */
+  noteKept(hash) {
+    if (HASH.test(hash)) this.kept.add(hash);
+  }
+  /** Whether a page of the site has said it keeps `hash`. */
+  isKept(hash) {
+    return this.kept.has(hash);
+  }
+  /** Waits while another page keeps `hash`. */
+  async settled(hash) {
+    await this.keeping.get(hash)?.catch(() => {
+    });
+  }
+  /**
+   * `run` as the one keeping of `hash` at a time: it sends the files and resolves once the page kept them (or could
+   * not). A second keeping of the same hash meanwhile waits for the first and is not run: `null` comes back, and the
+   * caller goes without files.
+   */
+  async keepOnce(hash, run) {
+    const busy = this.keeping.get(hash);
+    if (busy) {
+      await busy.catch(() => {
+      });
+      return null;
+    }
+    const going = run();
+    const done = going.then(() => {
+    }, () => {
+    });
+    this.keeping.set(hash, done);
+    void done.then(() => {
+      if (this.keeping.get(hash) === done) this.keeping.delete(hash);
+    });
+    return going;
+  }
+  /** Marks `hash` as being kept by a page until `done` settles (a page that keeps across a load of its own). */
+  markKeeping(hash, done) {
+    const settled = done.then(() => {
+    }, () => {
+    });
+    this.keeping.set(hash, settled);
+    void settled.then(() => {
+      if (this.keeping.get(hash) === settled) this.keeping.delete(hash);
+    });
+  }
+};
+
 // src/bridge.ts
 function analysedDataSet(set) {
   if (!set || typeof set.hash !== "string" || !/^[0-9a-f]{16}$/.test(set.hash)) return null;
@@ -50,11 +177,14 @@ var Bridge = class {
   words;
   /** How long the page may take to say it is there. */
   readyMs;
-  constructor(url, host, words, readyMs = 3e4) {
+  /** Where a mod's files come from, and which the site's pages keep (shared with the plugin's other pages; 0.19.0). */
+  sources;
+  constructor(url, host, words, readyMs = 3e4, sources = null) {
     this.url = url;
     this.host = host;
     this.words = words;
     this.readyMs = readyMs;
+    this.sources = sources;
   }
   open() {
     if (this.ready) return this.ready;
@@ -66,7 +196,8 @@ var Bridge = class {
         if (m.type === "scmjs.sim.ready") {
           clearTimeout(timer);
           const files2 = m.files === "archives" || m.files === "copy" || m.files === "server" ? m.files : null;
-          resolve({ version: typeof m.version === "number" ? m.version : null, pathing: typeof m.pathing === "number" ? m.pathing : null, measure: typeof m.measure === "number" ? m.measure : null, tests: typeof m.tests === "number" ? m.tests : null, copies: typeof m.copies === "number" ? m.copies : null, debug: typeof m.debug === "number" ? m.debug : null, fights: typeof m.fights === "number" ? m.fights : null, files: files2, why: typeof m.why === "string" ? m.why : null, features: featuresOf(m.features) });
+          resolve({ version: typeof m.version === "number" ? m.version : null, pathing: typeof m.pathing === "number" ? m.pathing : null, measure: typeof m.measure === "number" ? m.measure : null, tests: typeof m.tests === "number" ? m.tests : null, copies: typeof m.copies === "number" ? m.copies : null, debug: typeof m.debug === "number" ? m.debug : null, fights: typeof m.fights === "number" ? m.fights : null, files: files2, why: typeof m.why === "string" ? m.why : null, features: featuresOf(m.features), mods: pageModsOf(m.mods) });
+          this.sources?.note(pageModsOf(m.mods));
           return;
         }
         const p = typeof m.id === "number" ? this.pending.get(m.id) : void 0;
@@ -97,7 +228,7 @@ var Bridge = class {
           p.resolve(m.result);
         } else if (m.type === "scmjs.sim.error") {
           p.done();
-          p.reject(new Error(String(m.message ?? "")));
+          p.reject(pageError(m));
         }
       });
     });
@@ -116,14 +247,38 @@ var Bridge = class {
     if (this.pending.size === 0 && !this.opening && this.sessions.size === 0) this.close();
     try {
       const r = await this.open();
-      return { available: r.files !== null, files: r.files, reason: r.files ? null : r.why ?? this.words.noFiles, timeline: r.version, pathing: r.pathing, measure: r.measure, tests: r.tests, copies: r.copies, debug: r.debug, fights: r.fights, features: r.features };
+      return { available: r.files !== null, files: r.files, reason: r.files ? null : r.why ?? this.words.noFiles, timeline: r.version, pathing: r.pathing, measure: r.measure, tests: r.tests, copies: r.copies, debug: r.debug, fights: r.fights, features: r.features, ...r.mods ? { mods: r.mods } : {} };
     } catch (err) {
       return { available: false, files: null, reason: err instanceof Error ? err.message : String(err), timeline: null, pathing: null, measure: null, tests: null, copies: null, debug: null, fights: null, features: [] };
     }
   }
   async analyse(replay, options = {}) {
-    const progress = options.onProgress && ((m) => options.onProgress({ stage: m.stage === "playing" ? "playing" : "starting", frame: Number(m.frame) || 0, frames: Number(m.frames) || 0 }));
-    return this.ask(options.signal, progress, (id) => ({ type: "scmjs.sim.analyse", id, replay: replay.slice(), name: options.name, options: { sampleEvery: options.sampleEvery, positionsEvery: options.positionsEvery, ...withDataSet(options.dataSet) } }));
+    const progress = options.onProgress && ((m) => options.onProgress({ stage: m.stage === "playing" ? "playing" : m.stage === "keeping" ? "keeping" : "starting", frame: Number(m.frame) || 0, frames: Number(m.frames) || 0, ...m.stage === "keeping" && typeof m.message === "string" ? { message: m.message } : {} }));
+    return this.withModFiles(options.dataSet, (dataSet) => (
+      // (A copy: the caller keeps its bytes.)
+      this.ask(options.signal, progress, (id) => ({ type: "scmjs.sim.analyse", id, replay: replay.slice(), name: options.name, options: { sampleEvery: options.sampleEvery, positionsEvery: options.positionsEvery, ...dataSet } }))
+    ));
+  }
+  /**
+   * A request that names a mod (0.19.0, a page whose `ready` says "modFiles"): its files go with it when the page does
+   * not keep the mod and they can be found (`ModSources`), once for the site — a request while another page keeps the
+   * same mod waits for that, then goes without them. Otherwise the data set goes as before 0.19.0, without files.
+   */
+  async withModFiles(set, send) {
+    const said = withDataSet(set);
+    const r = said.dataSet && this.sources && set ? await this.open().catch(() => null) : null;
+    if (!r || !r.features.includes("modFiles") || !said.dataSet || !this.sources || !set) return send(said);
+    const sources = this.sources, hash = said.dataSet.hash;
+    await sources.settled(hash);
+    if (pageKeeps(r.mods, hash) || sources.isKept(hash) || !sources.has(set)) return send(said);
+    const kept = await sources.keepOnce(hash, async () => {
+      const files2 = await sources.files(set);
+      const result = await send({ dataSet: { ...said.dataSet, ...files2 ? { files: files2 } : {} } });
+      if (files2) sources.noteKept(hash);
+      return { result };
+    });
+    if (kept) return kept.result;
+    return send(said);
   }
   /** A map's pathing: `scenario` is the bare scenario (.chk bytes). */
   async pathing(scenario, options = {}) {
@@ -181,7 +336,7 @@ var Bridge = class {
   async fights(replay, fights, options = {}) {
     const { signal, onProgress, dataSet, ...asked } = options;
     const progress = onProgress && ((m) => onProgress({ stage: m.stage === "playing" ? "playing" : "starting", frame: Number(m.frame) || 0, frames: Number(m.frames) || 0 }));
-    return this.ask(signal, progress, (id) => ({ type: "scmjs.sim.fights", id, replay: replay.slice(), fights, options: { ...asked, ...withDataSet(dataSet) } }), (r) => r.fights === null ? this.words.noFights : null);
+    return this.withModFiles(dataSet, (d) => this.ask(signal, progress, (id) => ({ type: "scmjs.sim.fights", id, replay: replay.slice(), fights, options: { ...asked, ...d } }), (r) => r.fights === null ? this.words.noFights : null));
   }
   /** One request to the page: `message` with its id, answered by a result, an error, or a cancel when `signal` aborts. */
   async ask(signal, progress, message, refuse) {
@@ -264,7 +419,12 @@ var ViewBridge = class {
   hovers = /* @__PURE__ */ new Set();
   wheels = /* @__PURE__ */ new Set();
   pointers = /* @__PURE__ */ new Set();
+  keepings = /* @__PURE__ */ new Set();
   closed = false;
+  /** What the page said when it last loaded. */
+  latest = { files: null, reason: null };
+  /** Where a mod's files come from, and which the site's pages keep (shared with the plugin's other pages). */
+  sources;
   /** The address the view's page was opened at (`?view`), and the one the frame stands at now (`viewAddress`). */
   base;
   at;
@@ -273,8 +433,9 @@ var ViewBridge = class {
   /** Loads asked for, counted: one waiting for the page to load again is replaced by a later one. */
   loads = 0;
   readyMs;
-  constructor(url, element, host, words, readyMs = 3e4) {
+  constructor(url, element, host, words, readyMs = 3e4, sources = null) {
     this.words = words;
+    this.sources = sources;
     this.base = this.at = url;
     this.readyMs = readyMs;
     let answered = () => {
@@ -291,7 +452,10 @@ var ViewBridge = class {
           clearTimeout(timer);
           this.debugs = typeof m.debug === "number";
           const f = files(m.files);
-          const r = { files: f, reason: f ? null : typeof m.why === "string" && m.why ? m.why : words.noFiles, features: featuresOf(m.features) };
+          const mods = pageModsOf(m.mods);
+          const r = { files: f, reason: f ? null : typeof m.why === "string" && m.why ? m.why : words.noFiles, features: featuresOf(m.features), ...mods ? { mods } : {} };
+          this.latest = r;
+          this.sources?.note(mods);
           answered(r);
           for (const w of this.readyAgain.splice(0)) w(r);
           return;
@@ -315,8 +479,13 @@ var ViewBridge = class {
           const l = this.loading ?? this.debugging;
           if (l === this.loading) this.loading = null;
           else this.debugging = null;
-          if (l) l.reject(new Error(message));
+          if (l) l.reject(pageError(m));
           else for (const e of this.errors) e(message);
+          return;
+        }
+        case "scmjs.view.keeping": {
+          const k = { hash: typeof m.hash === "string" ? m.hash : "", message: String(m.message ?? "") };
+          for (const l of this.keepings) l(k);
           return;
         }
         case "scmjs.view.debugged": {
@@ -386,10 +555,35 @@ var ViewBridge = class {
     this.loading = null;
     const ticket = ++this.loads, at = viewAddress(this.base, dataSet);
     if (at !== this.at) await this.goTo(at, ticket);
-    return new Promise((resolve, reject) => {
+    const message = { type: "scmjs.view.load", replay: replay.slice(), name };
+    const said = analysedDataSet(dataSet), page = this.latest;
+    let handing = null;
+    if (said && this.sources && (page.features ?? []).includes("modFiles")) {
+      const hash = said.hash, sent = { ...said };
+      message.dataSet = sent;
+      await this.sources.settled(hash);
+      if (ticket !== this.loads) throw new Error(this.words.replaced);
+      if (!pageKeeps(page.mods ?? null, hash) && !this.sources.isKept(hash) && this.sources.has(dataSet)) {
+        const files2 = await this.sources.files(dataSet);
+        if (this.closed) throw new Error(this.words.closed);
+        if (ticket !== this.loads) throw new Error(this.words.replaced);
+        if (files2) {
+          sent.files = files2;
+          handing = hash;
+        }
+      }
+    }
+    const loaded = new Promise((resolve, reject) => {
       this.loading = { resolve, reject };
-      this.frame.post({ type: "scmjs.view.load", replay: replay.slice(), name });
+      this.frame.post(message);
     });
+    if (handing) {
+      const hash = handing;
+      this.sources.markKeeping(hash, loaded);
+      void loaded.then(() => this.sources.noteKept(hash), () => {
+      });
+    }
+    return loaded;
   }
   /**
    * Points the frame at `at` when it stands elsewhere and waits for the page there to say ready; rejects when a later
@@ -499,6 +693,9 @@ var ViewBridge = class {
   onPointer(listener) {
     return this.listen(this.pointers, listener);
   }
+  onKeeping(listener) {
+    return this.listen(this.keepings, listener);
+  }
   dispose() {
     if (this.closed) return;
     this.closed = true;
@@ -517,6 +714,7 @@ var ViewBridge = class {
     this.hovers.clear();
     this.wheels.clear();
     this.pointers.clear();
+    this.keepings.clear();
     this.frame.remove();
   }
 };
@@ -1175,6 +1373,10 @@ var PlayTab = class {
   ready = false;
   /** What the page's last `ready` said it does (`features`; none from a page before scm-sim's R2b). */
   said = [];
+  /** What the page's last `ready` said of the mods this browser keeps (0.19.0, "modFiles"); null from a page before. */
+  mods = null;
+  /** The answer the tab is waiting to give (resolved by `started`/`shown`, or rejected). */
+  answer = null;
   waiting = null;
   address;
   words;
@@ -1187,20 +1389,25 @@ var PlayTab = class {
       this.live.gone();
       this.ready = true;
       this.said = featuresOf(m.features);
+      this.mods = pageModsOf(m.mods);
+      this.sources?.note(this.mods);
       this.hand();
     } else if (m.type === "scmjs.play.started" || m.type === "scmjs.play.shown") {
       this.waiting?.resolve(m.type === "scmjs.play.shown" ? "shown" : "started");
       this.waiting = null;
     } else if (m.type === "scmjs.play.error") {
-      this.waiting?.reject(new Error(String(m.message ?? "")));
+      this.waiting?.reject(pageError(m));
       this.waiting = null;
     }
   };
   /** Live edit with the game in the tab (`src/live.ts`). */
   live;
-  constructor(address, words) {
+  /** Where a mod's files come from, and which the site's pages keep (shared with the plugin's other pages; 0.19.0). */
+  sources;
+  constructor(address, words, sources = null) {
     this.address = address;
     this.words = words;
+    this.sources = sources;
     this.live = new LiveLink((message) => {
       if (!this.tab || this.tab.closed || !this.ready) return false;
       this.tab.postMessage(message, this.address.origin);
@@ -1219,11 +1426,45 @@ var PlayTab = class {
   hand() {
     const h = this.handing;
     if (!this.tab || this.tab.closed || !h || !this.ready) return;
+    const fetching = this.filesToFetch(h.dataSet);
+    if (!fetching) {
+      this.post(h, null);
+      return;
+    }
+    const tab = this.tab, answer = this.answer, hash = h.dataSet?.hash ?? "";
+    void fetching.then((files2) => {
+      if (this.handing !== h || this.tab !== tab || !this.ready) return;
+      if (files2 && answer && /^[0-9a-f]{16}$/.test(hash)) this.sources?.markKeeping(hash, answer);
+      this.post(h, files2);
+    }, (err) => {
+      if (this.handing === h) {
+        this.waiting?.reject(err instanceof Error ? err : new Error(String(err)));
+        this.waiting = null;
+      }
+    });
+  }
+  /**
+   * The mod's files to gather before the hand-over (0.19.0), or null to hand over as before: the caller's own source
+   * (a function) is asked whenever the page might keep them; a mod registered by its hash only on a page that says it
+   * does not keep the mod ("modFiles"). Files as a list go as they always did.
+   */
+  filesToFetch(set) {
+    if (!set || !this.sources || Array.isArray(set.files)) return null;
+    const hash = typeof set.hash === "string" ? set.hash : "";
+    const modFiles = this.said.includes("modFiles");
+    if (modFiles && (pageKeeps(this.mods, hash) || this.sources.isKept(hash))) return null;
+    if (typeof set.files === "function") return this.sources.files(set);
+    if (!modFiles || !this.sources.has(set)) return null;
+    return this.sources.settled(hash).then(() => this.sources.isKept(hash) ? null : this.sources.files(set));
+  }
+  post(h, files2) {
+    if (!this.tab || this.tab.closed) return;
+    const withFiles = (d) => ({ ...pageDataSet(d), ...files2 ? { files: files2 } : {} });
     if ("replay" in h) {
-      const dataSet = h.dataSet === void 0 ? {} : { dataSet: h.dataSet && pageDataSet(h.dataSet) };
+      const dataSet = h.dataSet === void 0 ? {} : { dataSet: h.dataSet && withFiles(h.dataSet) };
       this.tab.postMessage({ type: "scmjs.play", replay: h.replay.slice(), name: h.name, frame: h.frame, ...h.player !== void 0 ? { player: h.player } : {}, ...dataSet }, this.address.origin);
     } else {
-      const dataSet = h.dataSet ? pageDataSet(h.dataSet) : null;
+      const dataSet = h.dataSet ? withFiles(h.dataSet) : null;
       this.tab.postMessage({ type: "scmjs.play", ...h.bytes ? { map: h.bytes.slice() } : {}, name: h.name, ...h.how, ...dataSet ? { dataSet } : {} }, this.address.origin);
     }
   }
@@ -1257,6 +1498,9 @@ var PlayTab = class {
     this.waiting?.reject(new Error(this.words.replaced));
     const started = new Promise((resolve, reject) => {
       this.waiting = { resolve, reject };
+    });
+    this.answer = started;
+    started.catch(() => {
     });
     this.hand();
     return started;
@@ -1300,19 +1544,21 @@ var PlayTab = class {
   }
 };
 function pageDataSet(d) {
-  return { ...d, ...d.files ? { files: d.files.map((f) => ({ path: f.path.toLowerCase().replace(/\\/g, "/"), file: new File([f.bytes], f.path.split(/[\\/]/).pop() || "file") })) } : {} };
+  const { files: files2, ...rest } = d;
+  return { ...rest, ...Array.isArray(files2) ? { files: files2.map((f) => ({ path: f.path.toLowerCase().replace(/\\/g, "/"), file: new File([f.bytes], f.path.split(/[\\/]/).pop() || "file") })) } : {} };
 }
 function validReplayDataSet(set) {
   if (!set || typeof set !== "object") return null;
   const { hash, name, url, files: files2, live } = set;
   const good = typeof hash === "string" && /^[0-9a-f]{16}$/.test(hash) ? hash : "";
   const kept = Array.isArray(files2) ? files2.filter((f) => !!f && typeof f.path === "string" && !!f.path && f.bytes instanceof Uint8Array) : [];
-  if (!good && !kept.length) return null;
+  const source = typeof files2 === "function" ? files2 : void 0;
+  if (!good && !kept.length && !source) return null;
   return {
     hash: good,
     ...typeof name === "string" && name.trim() ? { name: name.trim() } : {},
     ...typeof url === "string" && /^https?:\/\/\S+$/i.test(url) ? { url } : {},
-    ...kept.length ? { files: kept } : {},
+    ...kept.length ? { files: kept } : source ? { files: source } : {},
     ...live === true ? { live: true } : {}
   };
 }
@@ -1425,6 +1671,7 @@ function activate(api) {
   const t = api.i18n.t;
   const address = typeof location === "undefined" ? null : simAddress(location);
   const absent = () => new Error(t("This editor has no play page beside it, so the engine cannot be reached from here. It is at scmjs.dev."));
+  const sources = new ModSources();
   const bridge = address && new Bridge(address.analyse, domFrames(address.origin), {
     noAnswer: t("The engine's page did not answer."),
     noFiles: t("This browser has no copy of StarCraft to play from. Give the site your game on the Game Data page."),
@@ -1436,14 +1683,14 @@ function activate(api) {
     sessionOver: t("That debugging session is over."),
     noCopies: t("A test of several players runs a copy of the game for each, which needs memory shared between them: this browser does not allow that on the engine's page (Chrome and Edge from version 137 do), or the page is from before it."),
     noFights: t("The engine's page cannot play a fight again yet. Reload the editor and try again.")
-  });
+  }, void 0, sources);
   const tab = address && new PlayTab(address, {
     blocked: t("The browser did not let the play page open. Allow pop-ups for this site and try again."),
     noMap: t("There is no map to play."),
     replaced: t("Another map was started in its place."),
     noTab: t("No play page is open: start a test game first."),
     noAnswer: t("The play page did not answer. Reload it, or start the test game again.")
-  });
+  }, sources);
   const settings = () => readSettings(api.storage.get(SETTINGS_KEY, null));
   const openDataSet = () => {
     const profile = api.gameData.profile();
@@ -1511,7 +1758,7 @@ function activate(api) {
         replaced: t("Another replay was loaded in its place."),
         closed: t("The game view was closed."),
         noDebug: t("The game view cannot draw a debugged run yet. Reload the editor and try again.")
-      });
+      }, void 0, sources);
       view.onKey(pressOnWindow);
       views.add(view);
       const dispose = view.dispose.bind(view);
@@ -1520,7 +1767,8 @@ function activate(api) {
         dispose();
       };
       return view;
-    }
+    },
+    provideMod: (hash, mod) => sources.provide(hash, mod)
   };
   const provided = api.services.provide("engine", service, { version: SERVICE_VERSION });
   const liveService = {
