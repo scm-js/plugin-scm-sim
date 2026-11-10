@@ -127,7 +127,9 @@ again with `?lift=live` instead of refusing). From the analysis page it can also
 `"modFiles"` (since 0.19.0) means the pages say which mods the browser keeps (`mods`: the
 hashes it keeps, and the one it plays), take a mod's files with a replay when they do not keep
 it, and say why they could not do something in a word as well as a sentence (see
-[Mods the engine has not got](#mods-the-engine-has-not-got)). It is empty for an older page.
+[Mods the engine has not got](#mods-the-engine-has-not-got)). `"races"` (since 0.20.0) means a
+race is a number to the pages and a mod may name the races it adds: see
+[Races a mod adds](#races-a-mod-adds). It is empty for an older page.
 
 ### `analyse(replay, options?)`
 
@@ -397,6 +399,8 @@ The rest of the view, in short (`contract.d.ts` has the details):
   and `rewinds` (whether a seek back is quick). Since 0.19.2 it also says `slow: true` for a
   replay that runs ahead slowly because a mod's plugins run (about 60 frames a second): even a
   seek back takes a while there, so send a drag's seeks sparingly, one when it ends.
+- Since 0.20.0, `load` also says `races` where the replay's mod declares races of its own (see
+  [Races a mod adds](#races-a-mod-adds)). A player's `race` is always the byte the replay holds.
 - `onFrame` gives the frame shown, whether it plays, and while a seek runs, `seeking`. Since
   0.19.2 it also gives `target`, the frame a seek (or a restart's run) is going to, while one is
   under way; a page from before leaves it out.
@@ -456,6 +460,33 @@ From 0.19.0 it may also carry `reason` (`ScmSimError` in `contract.d.ts`):
 | `"remastered-terrain"` | The map is on terrain only StarCraft: Remastered has. A copy of the game made from a Remastered installation plays it. |
 
 A page from before says no reason.
+
+### Races a mod adds
+
+Since 0.20.0, with a page whose `features` has `"races"`.
+
+A race is a number. 0 to 7 are the game's own (0 Zerg, 1 Terran, 2 Protoss, 6 Random, and so
+on); a mod may add others, such as a fourth playable race whose players' records hold 69. The
+pages pass that byte through unchanged: a replay's `players` say 69, and a race nothing names
+reads "Race 69".
+
+A data set may name the races it adds, beside its name and never in its hashed files, so naming
+a race does not change the mod's hash. Pass them as `races` on any `dataSet` (`analyse`,
+`fights`, `view().load`, `playReplay`, and the `mod` of `scm-sim.live`'s `play`), and the Test in
+Browser hand-over passes the editor's data set's own (`GameDataProfile.races`, where the editor
+has them):
+
+```ts
+await sim.analyse(bytes, {
+  dataSet: { hash, live: true, races: [{ id: 69, name: "Askosi", letter: "a", like: 1 }] },
+});
+```
+
+`id` is 8 to 255, `name` 1 to 40 characters; `letter` is the letter of the race's own files
+(`game\aconsole.pcx`) and `like` the game's race it plays as (0, 1 or 2), each where known. A
+row that is not valid is left out, not refused. The page keeps the table with the mod, names
+the players of the view's list by it, and says it back: the loaded replay's `races`, and
+`ReplayTimeline.mod.races`. A page from before ignores it.
 
 ## Live edit: `scm-sim.live`
 

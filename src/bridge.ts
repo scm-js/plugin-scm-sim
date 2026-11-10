@@ -47,21 +47,24 @@
  * to it again, its progress starting over, and given up when the page has loaded again too often with it waiting
  * (`AGAIN`). A debugger's session lived in the document before, so it is over, as one closed.
  */
-import type { FightAsk, FightsOptions, FightsProgress, FightsResult, ScmSimDebugSession, ScmSimPicture, AnalyseOptions, MeasureOptions, MeasureProgress, MeasureResult, PathingOptions, PathingProgress, PathingResult, ReplayDataSet, ReplayTimeline, ScmSimStatus, TestCopiesOptions, TestCopyResult, TestRunOptions } from "../contract";
+import type { FightAsk, FightsOptions, FightsProgress, FightsResult, ScmSimDebugSession, ScmSimPicture, AnalyseOptions, MeasureOptions, MeasureProgress, MeasureResult, PathingOptions, PathingProgress, PathingResult, DataSetRace, ReplayDataSet, ReplayTimeline, ScmSimStatus, TestCopiesOptions, TestCopyResult, TestRunOptions } from "../contract";
 import { featuresOf } from "./features";
+import { racesOf } from "./races";
 import { pageError, pageKeeps, pageModsOf, type ModSources, type PageMods } from "./mods";
 
 /**
  * The mod a replay was played with, as the analysis page is told it (0.18.0): its hash, name, makers' page and `live`,
  * never its files (the page plays the mod the browser keeps); null for none, a hash that is not 16 hex digits included.
  */
-export function analysedDataSet(set: ReplayDataSet | null | undefined): { hash: string; name?: string; url?: string; live?: true } | null {
+export function analysedDataSet(set: ReplayDataSet | null | undefined): { hash: string; name?: string; url?: string; live?: true; races?: DataSetRace[] } | null {
   if (!set || typeof set.hash !== "string" || !/^[0-9a-f]{16}$/.test(set.hash)) return null;
   return {
     hash: set.hash,
     ...(typeof set.name === "string" && set.name.trim() ? { name: set.name.trim() } : {}),
     ...(typeof set.url === "string" && /^https?:\/\/\S+$/i.test(set.url) ? { url: set.url } : {}),
     ...(set.live === true ? { live: true as const } : {}),
+    // (the races the data set adds, 0.20.0: a page from before reads no such field)
+    ...racesOf(set.races),
   };
 }
 

@@ -161,7 +161,11 @@ export interface ReplayTimeline {
  * `SCMJ` tag, else `AnalyseOptions.dataSet`); `name`, the kept mod's; `plugins`, those that ran in load order by file
  * name (empty where none ran); `lifter`, what lifted the game's code (null: the shipped module).
  */
-export interface AnalysedMod { hash: string; name: string; plugins: string[]; lifter: string | null }
+export interface AnalysedMod {
+  hash: string; name: string; plugins: string[]; lifter: string | null;
+  /** The races the mod adds (0.20.0, a page whose `features` has "races"): the kept mod's, or as `dataSet.races` said them. */
+  races?: DataSetRace[];
+}
 
 export interface AnalyseProgress {
   /**
@@ -589,6 +593,12 @@ export interface ViewedReplay {
   looks: ViewLooks;
   /** Whether the page plays a camera track (`ScmSimView.follow`); a page from before tracks ignores one. */
   follows: boolean;
+  /**
+   * The races the replay's data set adds (0.20.0, a page whose `features` has "races"), by race byte: from its `SCMJ`
+   * tag, the `dataSet.races` handed with it, or the mod the page plays. A player's `race` is the byte as the replay has
+   * it: 0–7 are the game's, any other a race of the data set, named here when it is declared and "Race N" otherwise.
+   */
+  races?: DataSetRace[];
 }
 
 /**
@@ -959,7 +969,30 @@ export interface LiveFile { path: string; bytes: Uint8Array }
  * edits were written (`firegraft` named and the engine a lifter, not "shipped") — so the page is opened with its live
  * lifter (`?lift=live`).
  */
-export interface ReplayDataSet { hash: string; name?: string; url?: string; files?: LiveFile[] | ModSource; live?: boolean }
+export interface ReplayDataSet {
+  hash: string; name?: string; url?: string; files?: LiveFile[] | ModSource; live?: boolean;
+  /**
+   * The races the data set adds (0.20.0): passed to the page as given, invalid rows left out. A page whose `features`
+   * has "races" keeps them with the mod and names the replay's players by them; a page from before ignores them.
+   */
+  races?: DataSetRace[];
+}
+
+/**
+ * A race a data set adds to the game's own (0.20.0; the same shape as the editor's `GameDataProfile.races`). A race is a
+ * number: 0–7 are the game's own and cannot be declared.
+ */
+export interface DataSetRace {
+  /** The race byte: 8–255. */
+  id: number;
+  /** What it is called, 40 characters at most, trimmed, not empty. */
+  name: string;
+  /** The lower-case letter its per-race files go by (`game\<letter>console.pcx`, `rez\statbtn<letter>.bin`), when it has them. */
+  letter?: string;
+  /** The game's race it plays as, where only the game's three are known: 0, 1 or 2. Absent: not declared. */
+  like?: 0 | 1 | 2;
+  [field: string]: unknown;
+}
 
 /** A file of a mod by the game's path (`arr/weapons.dat`), or by its path in the mod's folder (`Release/mpq/arr/weapons.dat`, `plugins/gptp.qdp`): the page reads a folder's layout as it reads a dropped one. */
 export interface ModSourceFile { path: string; file: File }
@@ -1027,4 +1060,4 @@ export interface ScmSimLiveService {
   play(test: LiveTest | Promise<LiveTest>): Promise<"started" | "shown">;
 }
 /** What `ScmSimLiveService.play` hands over. */
-export interface LiveTest { map: { bytes: Uint8Array; name: string } | null; mod: { name: string; hash: string; files: LiveFile[] }; useMapSettings?: boolean }
+export interface LiveTest { map: { bytes: Uint8Array; name: string } | null; mod: { name: string; hash: string; files: LiveFile[]; /** The races the mod adds (0.20.0), passed to the page with its data set. */ races?: DataSetRace[] }; useMapSettings?: boolean }

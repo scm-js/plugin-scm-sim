@@ -6,9 +6,10 @@
  *                                                         page from before did not, from scm-sim's R2b: "replayDoor", "liveSwitch")
  *   → `{ type: "scmjs.play", map, name, useMapSettings, race, slot?, computers, setup, dataSet? }`
  *                                                         a whole .scm / .scx file, and how to play it (`src/settings.ts`);
- *                                                         `dataSet` `{ id, name, hash }` when the editor makes the map
+ *                                                         `dataSet` `{ id, name, hash, races? }` when the editor makes the map
  *                                                         with a data set other than the game's own (its Test Map hands
- *                                                         it over), for the page to play it with those files
+ *                                                         it over), for the page to play it with those files; `races`
+ *                                                         (0.20.0) the races the data set adds, passed as given
  *   ← `{ type: "scmjs.play.started" }` / `{ type: "scmjs.play.shown" }` (on the setup screen) / `{ type: "scmjs.play.error", message }`
  *
  * A replay goes the same way (the replay plugin's Play From Here; a play page from before says "No map came with the
@@ -31,7 +32,8 @@
  * another request for it waits; a page that says ready again before answering took them with it, and the keeping is
  * over then (0.19.2): the hand-over again would otherwise wait for its own answer, which cannot come.
  */
-import type { LiveFile, LiveTest, ModSourceFile, ReplayDataSet } from "../contract";
+import type { DataSetRace, LiveFile, LiveTest, ModSourceFile, ReplayDataSet } from "../contract";
+import { racesOf } from "./races";
 import { playAddress, type SimAddress } from "./address";
 import { LiveLink, type LiveWords } from "./live";
 import { featuresOf } from "./features";
@@ -49,7 +51,7 @@ export type PlayOutcome = "started" | "shown";
  * mod handed over whole (the Mod Editor's test game, `scm-sim.live`) carries its files, which the page keeps as a
  * dropped mod and plays.
  */
-export interface PlayDataSet { id: string; name: string; hash: string; files?: LiveFile[] }
+export interface PlayDataSet { id: string; name: string; hash: string; files?: LiveFile[]; /** The races the data set adds (0.20.0), passed as given. */ races?: DataSetRace[] }
 
 /** A map to play, as the editor's Test Map hands it over. */
 export interface PlayMap { bytes: Uint8Array; name: string; dataSet?: PlayDataSet }
@@ -198,7 +200,7 @@ export class PlayTab {
   async playMod(test: Promise<LiveTest>, how: PlayHow): Promise<PlayOutcome> {
     if (!this.open()) throw new Error(this.words.blocked);
     const { map, mod, useMapSettings } = await test;
-    this.handing = { bytes: map?.bytes ?? null, name: map?.name ?? mod.name, how: useMapSettings === undefined ? how : { ...how, useMapSettings }, dataSet: { id: mod.name, name: mod.name, hash: mod.hash, files: mod.files } };
+    this.handing = { bytes: map?.bytes ?? null, name: map?.name ?? mod.name, how: useMapSettings === undefined ? how : { ...how, useMapSettings }, dataSet: { id: mod.name, name: mod.name, hash: mod.hash, files: mod.files, ...racesOf(mod.races) } };
     return this.handOver();
   }
 
@@ -231,7 +233,7 @@ function pageDataSet<T extends { files?: unknown }>(d: T): Omit<T, "files"> & { 
  */
 export function validReplayDataSet(set: unknown): ReplayDataSet | null {
   if (!set || typeof set !== "object") return null;
-  const { hash, name, url, files, live } = set as Record<string, unknown>;
+  const { hash, name, url, files, live, races } = set as Record<string, unknown>;
   const good = typeof hash === "string" && /^[0-9a-f]{16}$/.test(hash) ? hash : "";
   const kept = Array.isArray(files) ? (files as { path?: unknown; bytes?: unknown }[]).filter((f): f is LiveFile => !!f && typeof f.path === "string" && !!f.path && f.bytes instanceof Uint8Array) : [];
   // (a source of the files, asked only when the page has not got the mod: 0.19.0)
@@ -243,13 +245,14 @@ export function validReplayDataSet(set: unknown): ReplayDataSet | null {
     ...(typeof url === "string" && /^https?:\/\/\S+$/i.test(url) ? { url } : {}),
     ...(kept.length ? { files: kept } : source ? { files: source } : {}),
     ...(live === true ? { live: true } : {}),
+    ...racesOf(races),
   };
 }
 
 /** The data set as the page is told it: the three fields as strings, or nothing (an editor from before it, or the game's own data). */
 export function validDataSet(set: unknown): PlayDataSet | null {
   if (!set || typeof set !== "object") return null;
-  const { id, name, hash } = set as Record<string, unknown>;
+  const { id, name, hash, races } = set as Record<string, unknown>;
   if (typeof id !== "string" || !id) return null;
-  return { id, name: typeof name === "string" && name ? name : id, hash: typeof hash === "string" ? hash : "" };
+  return { id, name: typeof name === "string" && name ? name : id, hash: typeof hash === "string" ? hash : "", ...racesOf(races) };
 }

@@ -84,7 +84,7 @@ describe("the play page's tab: a mod's test game, then live edit through the sam
       const address = { origin: "https://scmjs.dev", play: "https://scmjs.dev/play/", analyse: "", view: "" };
       const tab = new PlayTab(address, { blocked: "blocked", noMap: "no map", replaced: "replaced" });
       const say = (data: Record<string, unknown>) => { for (const l of listeners) l({ origin: address.origin, source: tabWindow, data } as unknown as MessageEvent); };
-      const started = tab.playMod(Promise.resolve({ map: { bytes: new Uint8Array([7]), name: "scene.scx" }, mod: { name: "Live Test Mod", hash: "d897bfbe5fc3a3e2", files: [{ path: "arr\\units.dat", bytes: new Uint8Array([1, 2]) }] } }), { useMapSettings: true, race: 1, computers: [], setup: false } as never);
+      const started = tab.playMod(Promise.resolve({ map: { bytes: new Uint8Array([7]), name: "scene.scx" }, mod: { name: "Live Test Mod", hash: "d897bfbe5fc3a3e2", files: [{ path: "arr\\units.dat", bytes: new Uint8Array([1, 2]) }], races: [{ id: 69, name: "Askosi", letter: "a", like: 1 }, { id: 3, name: "Not a mod's" }] } }), { useMapSettings: true, race: 1, computers: [], setup: false } as never);
       await new Promise((r) => setTimeout(r, 0));
       expect(posted).toEqual([]);
       expect(await tab.live.patch([]).catch((e: Error) => e.message)).toBe("No play page is open.");
@@ -94,6 +94,7 @@ describe("the play page's tab: a mod's test game, then live edit through the sam
       expect(handed.map).toEqual(new Uint8Array([7]));
       expect(handed.dataSet.hash).toBe("d897bfbe5fc3a3e2");
       expect(handed.dataSet.files[0].path).toBe("arr/units.dat");
+      expect((handed.dataSet as { races?: unknown }).races).toEqual([{ id: 69, name: "Askosi", letter: "a", like: 1 }]);
       say({ type: "scmjs.play.started", name: "scene.scx" });
       expect(await started).toBe("started");
       const patched = tab.live.patch([{ table: "weapons", id: 0, field: "damage_amount", value: 16 }]);
