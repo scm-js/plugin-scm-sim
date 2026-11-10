@@ -973,7 +973,8 @@ export interface ReplayDataSet {
   hash: string; name?: string; url?: string; files?: LiveFile[] | ModSource; live?: boolean;
   /**
    * The races the data set adds (0.20.0): passed to the page as given, invalid rows left out. A page whose `features`
-   * has "races" keeps them with the mod and names the replay's players by them; a page from before ignores them.
+   * has "races" keeps them with the mod and names the replay's players by them; a page from before ignores them. An
+   * empty list (0.20.1) says the data set adds none, so the names a page kept for it go; no field says nothing.
    */
   races?: DataSetRace[];
 }
@@ -1060,4 +1061,4 @@ export interface ScmSimLiveService {
   play(test: LiveTest | Promise<LiveTest>): Promise<"started" | "shown">;
 }
 /** What `ScmSimLiveService.play` hands over. */
-export interface LiveTest { map: { bytes: Uint8Array; name: string } | null; mod: { name: string; hash: string; files: LiveFile[]; /** The races the mod adds (0.20.0), passed to the page with its data set. */ races?: DataSetRace[] }; useMapSettings?: boolean }
+export interface LiveTest { map: { bytes: Uint8Array; name: string } | null; mod: { name: string; hash: string; files: LiveFile[]; /** The races the mod adds (0.20.0), passed to the page with its data set: an empty list (0.20.1) when it adds none, no field when not said. */ races?: DataSetRace[] }; useMapSettings?: boolean }

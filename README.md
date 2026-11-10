@@ -473,8 +473,8 @@ reads "Race 69".
 A data set may name the races it adds, beside its name and never in its hashed files, so naming
 a race does not change the mod's hash. Pass them as `races` on any `dataSet` (`analyse`,
 `fights`, `view().load`, `playReplay`, and the `mod` of `scm-sim.live`'s `play`), and the Test in
-Browser hand-over passes the editor's data set's own (`GameDataProfile.races`, where the editor
-has them):
+Browser hand-over passes the editor's data set's own (what the editor keeps for it, or
+`GameDataProfile.races`, where the editor has them):
 
 ```ts
 await sim.analyse(bytes, {
@@ -487,6 +487,12 @@ await sim.analyse(bytes, {
 row that is not valid is left out, not refused. The page keeps the table with the mod, names
 the players of the view's list by it, and says it back: the loaded replay's `races`, and
 `ReplayTimeline.mod.races`. A page from before ignores it.
+
+Since 0.20.1, an empty list is passed on as it is: it says the data set adds no races, so a page
+that kept names for the mod from before can drop them (a page that does not read it yet keeps
+them, as it does when nothing is said). No `races` at all says nothing about them. The Test in
+Browser hand-over sends an empty list when the editor keeps race names for its data set and has
+none (the names were cleared, say), and no field from an editor that cannot keep race names.
 
 ## Live edit: `scm-sim.live`
 

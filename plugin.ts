@@ -18,7 +18,7 @@ import { domViewFrames, pressOnWindow, ViewBridge } from "./src/view";
 import { triggerDebugger } from "./src/debug";
 import { registerPreferencesPage, testSettingsForm } from "./src/page";
 import { PlayTab } from "./src/play";
-import { racesOf } from "./src/races";
+import { editorRaces, type EditorRaces } from "./src/races";
 import { playHow, readSettings, SETTINGS_KEY } from "./src/settings";
 import { testTargetCall } from "./src/target";
 import { ModSources } from "./src/mods";
@@ -66,8 +66,8 @@ export function activate(api: PluginApi): () => void {
     const profile = api.gameData.profile();
     if (profile.id === "starcraft") return {};
     const hash = (api.gameData.source() as { hash?: string } | null)?.hash ?? "";
-    // (the races the data set adds, where the editor keeps them with its profile: an editor from before has none)
-    const races = racesOf((profile as { races?: unknown }).races ?? (api.gameData.source() as { profile?: { races?: unknown } } | null)?.profile?.races);
+    // (the races the data set adds, an empty list when the editor keeps race names and has none: `editorRaces`)
+    const races = editorRaces(api.gameData as EditorRaces, profile);
     return { dataSet: { id: profile.id, name: profile.name, hash, ...races } };
   };
   /** The map (left out: the open one, as Save would write it) played as the Preferences page says. */

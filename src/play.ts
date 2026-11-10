@@ -9,7 +9,8 @@
  *                                                         `dataSet` `{ id, name, hash, races? }` when the editor makes the map
  *                                                         with a data set other than the game's own (its Test Map hands
  *                                                         it over), for the page to play it with those files; `races`
- *                                                         (0.20.0) the races the data set adds, passed as given
+ *                                                         (0.20.0) the races the data set adds, passed as given (an
+ *                                                         empty list, 0.20.1: none; no field: not said)
  *   ← `{ type: "scmjs.play.started" }` / `{ type: "scmjs.play.shown" }` (on the setup screen) / `{ type: "scmjs.play.error", message }`
  *
  * A replay goes the same way (the replay plugin's Play From Here; a play page from before says "No map came with the
@@ -51,7 +52,7 @@ export type PlayOutcome = "started" | "shown";
  * mod handed over whole (the Mod Editor's test game, `scm-sim.live`) carries its files, which the page keeps as a
  * dropped mod and plays.
  */
-export interface PlayDataSet { id: string; name: string; hash: string; files?: LiveFile[]; /** The races the data set adds (0.20.0), passed as given. */ races?: DataSetRace[] }
+export interface PlayDataSet { id: string; name: string; hash: string; files?: LiveFile[]; /** The races the data set adds (0.20.0), passed as given: an empty list (0.20.1) is none, no field not said. */ races?: DataSetRace[] }
 
 /** A map to play, as the editor's Test Map hands it over. */
 export interface PlayMap { bytes: Uint8Array; name: string; dataSet?: PlayDataSet }

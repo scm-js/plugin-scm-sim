@@ -24,5 +24,29 @@ export function validRaces(value: unknown): DataSetRace[] {
   return out.sort((a, b) => a.id - b.id);
 }
 
-/** `{ races }` to spread into a data set when there are valid rows, else nothing (the message as before 0.20.0). */
-export const racesOf = (value: unknown): { races?: DataSetRace[] } => { const races = validRaces(value); return races.length ? { races } : {}; };
+/** The editor's data set as its races are read: the call of an editor that keeps race names, its profile and source. */
+export interface EditorRaces { races?: () => unknown; source(): unknown }
+
+/**
+ * The races the editor's data set adds, as Test Map hands them over with it (`profile`: the data set's,
+ * `gameData.profile()`): what an editor that keeps race names declares (`gameData.races()`, November 2026), an empty
+ * list when it declares none (0.20.1: the names were cleared, and the page must drop the ones it kept); else the
+ * profile's (or the source's profile's) list, where an editor keeps them there; nothing from an editor that has
+ * neither, which cannot say.
+ */
+export function editorRaces(gameData: EditorRaces, profile: unknown): { races?: DataSetRace[] } {
+  let kept: unknown;
+  try { kept = typeof gameData.races === "function" ? gameData.races() : undefined; } catch { kept = undefined; }
+  if (Array.isArray(kept)) return racesOf(kept);
+  const listed = (p: unknown) => (p && typeof p === "object" ? (p as { races?: unknown }).races : undefined);
+  let source: unknown;
+  try { source = gameData.source(); } catch { source = null; }
+  return racesOf(listed(profile) ?? listed(source && typeof source === "object" ? (source as { profile?: unknown }).profile : undefined));
+}
+
+/**
+ * `{ races }` to spread into a data set: the valid rows of a list, an empty list among them (0.20.1: the data set adds
+ * none, and a page that kept names for it from before drops them), else nothing (not said: a non-list, as from an
+ * editor that cannot keep race names, leaves the message as before 0.20.0).
+ */
+export const racesOf = (value: unknown): { races?: DataSetRace[] } => (Array.isArray(value) ? { races: validRaces(value) } : {});
