@@ -39,10 +39,24 @@ function validRaces(value) {
   }
   return out.sort((a, b) => a.id - b.id);
 }
-var racesOf = (value) => {
-  const races = validRaces(value);
-  return races.length ? { races } : {};
-};
+function editorRaces(gameData, profile) {
+  let kept;
+  try {
+    kept = typeof gameData.races === "function" ? gameData.races() : void 0;
+  } catch {
+    kept = void 0;
+  }
+  if (Array.isArray(kept)) return racesOf(kept);
+  const listed = (p) => p && typeof p === "object" ? p.races : void 0;
+  let source;
+  try {
+    source = gameData.source();
+  } catch {
+    source = null;
+  }
+  return racesOf(listed(profile) ?? listed(source && typeof source === "object" ? source.profile : void 0));
+}
+var racesOf = (value) => Array.isArray(value) ? { races: validRaces(value) } : {};
 
 // src/mods.ts
 var HASH = /^[0-9a-f]{16}$/;
@@ -1866,7 +1880,7 @@ function activate(api) {
     const profile = api.gameData.profile();
     if (profile.id === "starcraft") return {};
     const hash = api.gameData.source()?.hash ?? "";
-    const races = racesOf(profile.races ?? api.gameData.source()?.profile?.races);
+    const races = editorRaces(api.gameData, profile);
     return { dataSet: { id: profile.id, name: profile.name, hash, ...races } };
   };
   const test = (map) => {
