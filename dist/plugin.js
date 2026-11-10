@@ -180,6 +180,7 @@ function analysedDataSet(set) {
     ...set.live === true ? { live: true } : {}
   };
 }
+var AGAIN = 2;
 function both(first, then) {
   if (!first || !then) return first ?? then;
   return (m) => {
@@ -195,6 +196,8 @@ function abortError() {
 var Bridge = class {
   frame = null;
   ready = null;
+  /** What the page said in its last `ready`: a page that loaded again says it anew. */
+  facts = null;
   pending = /* @__PURE__ */ new Map();
   nextId = 1;
   /** The page has been asked for and has not yet said it is ready. */
@@ -217,16 +220,21 @@ var Bridge = class {
   }
   open() {
     if (this.ready) return this.ready;
+    let frame = null, loads = 0;
     this.ready = new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error(this.words.noAnswer)), this.readyMs);
-      this.frame = this.host(this.url, (data) => {
+      frame = this.frame = this.host(this.url, (data) => {
+        if (frame && this.frame !== frame) return;
         const m = data;
         if (!m || typeof m.type !== "string") return;
         if (m.type === "scmjs.sim.ready") {
           clearTimeout(timer);
           const files2 = m.files === "archives" || m.files === "copy" || m.files === "server" ? m.files : null;
-          resolve({ version: typeof m.version === "number" ? m.version : null, pathing: typeof m.pathing === "number" ? m.pathing : null, measure: typeof m.measure === "number" ? m.measure : null, tests: typeof m.tests === "number" ? m.tests : null, copies: typeof m.copies === "number" ? m.copies : null, debug: typeof m.debug === "number" ? m.debug : null, fights: typeof m.fights === "number" ? m.fights : null, files: files2, why: typeof m.why === "string" ? m.why : null, features: featuresOf(m.features), mods: pageModsOf(m.mods) });
-          this.sources?.note(pageModsOf(m.mods));
+          const r = { version: typeof m.version === "number" ? m.version : null, pathing: typeof m.pathing === "number" ? m.pathing : null, measure: typeof m.measure === "number" ? m.measure : null, tests: typeof m.tests === "number" ? m.tests : null, copies: typeof m.copies === "number" ? m.copies : null, debug: typeof m.debug === "number" ? m.debug : null, fights: typeof m.fights === "number" ? m.fights : null, files: files2, why: typeof m.why === "string" ? m.why : null, features: featuresOf(m.features), mods: pageModsOf(m.mods) };
+          this.facts = r;
+          this.sources?.note(r.mods);
+          if (loads++ === 0) resolve(r);
+          else this.loadedAgain(r);
           return;
         }
         const p = typeof m.id === "number" ? this.pending.get(m.id) : void 0;
@@ -271,11 +279,38 @@ var Bridge = class {
     });
     return this.ready;
   }
+  /** What the page said when it last loaded (`ready`): the first ready's answer, or a later one's when it loaded again. */
+  async page() {
+    const first = await this.open();
+    return this.facts ?? first;
+  }
+  /**
+   * The page said ready again (0.19.2): it loaded again, and what the document before was doing is gone. A debugger's
+   * session ends with it, as one closed. Every request waiting goes to the new page again, its progress starting over
+   * (`again`), unless it is a picture of a session that is over, the page has loaded again too often with it waiting, or
+   * the new page refuses it: those are rejected.
+   */
+  loadedAgain(r) {
+    this.sessions.clear();
+    const frame = this.frame;
+    if (!frame) return;
+    for (const [id, p] of [...this.pending]) {
+      const message = p.message;
+      const refused = !message ? this.words.sessionOver : ++p.again > AGAIN ? this.words.reloading : !r.files ? r.why ?? this.words.noFiles : p.refuse?.(r) ?? null;
+      if (!message || refused) {
+        p.done();
+        p.reject(new Error(refused ?? this.words.sessionOver));
+        continue;
+      }
+      p.progress?.({ stage: "starting", frame: 0, frames: 0, done: 0, total: 0, again: true, mods: r.mods });
+      if (this.pending.get(id) === p) frame.post(message(id));
+    }
+  }
   /** Whether the engine can run a game now. The page is loaded again, so a copy of the game made since is found. */
   async status() {
     if (this.pending.size === 0 && !this.opening && this.sessions.size === 0) this.close();
     try {
-      const r = await this.open();
+      const r = await this.page();
       return { available: r.files !== null, files: r.files, reason: r.files ? null : r.why ?? this.words.noFiles, timeline: r.version, pathing: r.pathing, measure: r.measure, tests: r.tests, copies: r.copies, debug: r.debug, fights: r.fights, features: r.features, ...r.mods ? { mods: r.mods } : {} };
     } catch (err) {
       return { available: false, files: null, reason: err instanceof Error ? err.message : String(err), timeline: null, pathing: null, measure: null, tests: null, copies: null, debug: null, fights: null, features: [] };
@@ -297,18 +332,37 @@ var Bridge = class {
    * minutes for a long one, and the view of the same replay waited all of that for a mod kept in the first one. `send`
    * is handed `watch` for the page's progress: once the page is past keeping (it says another stage after "keeping", or
    * "playing"), the mod counts as kept and whoever waits goes on. What it says while keeping is told to them (`say`).
+   *
+   * A page that loads again sends the request again (0.19.2), so `send`'s message is built from `dataSet` each time it
+   * is sent: the files go again to a page that does not keep the mod (the one before may have been part way through
+   * keeping it), and not to one that says it does (the one before kept it, then loaded again), which counts as kept.
    */
   async withModFiles(set, send) {
     const said = withDataSet(set);
-    const r = said.dataSet && this.sources && set ? await this.open().catch(() => null) : null;
+    const r = said.dataSet && this.sources && set ? await this.page().catch(() => null) : null;
     if (!r || !r.features.includes("modFiles") || !said.dataSet || !this.sources || !set) return send(said);
     const sources = this.sources, hash = said.dataSet.hash;
     await sources.settled(hash);
     if (pageKeeps(r.mods, hash) || sources.isKept(hash) || !sources.has(set)) return send(said);
-    const kept = await sources.keepOnce(hash, async (pageKept) => {
+    const handed = await sources.keepOnce(hash, async (pageKept) => {
       const files2 = await sources.files(set);
       let keeping = false, past = false;
+      const sent = { dataSet: { ...said.dataSet, ...files2 ? { files: files2 } : {} } };
+      const kept = () => {
+        if (past) return;
+        past = true;
+        sources.noteKept(hash);
+        pageKept();
+      };
       const watch = files2 ? (m) => {
+        if (m.again) {
+          keeping = false;
+          if (pageKeeps(m.mods ?? null, hash)) {
+            sent.dataSet = { ...said.dataSet };
+            kept();
+          }
+          return;
+        }
         if (past) return;
         if (m.stage === "keeping") {
           keeping = true;
@@ -316,15 +370,13 @@ var Bridge = class {
           return;
         }
         if (!keeping && m.stage !== "playing") return;
-        past = true;
-        sources.noteKept(hash);
-        pageKept();
+        kept();
       } : void 0;
-      const result = await send({ dataSet: { ...said.dataSet, ...files2 ? { files: files2 } : {} } }, watch);
+      const result = await send(sent, watch);
       if (files2) sources.noteKept(hash);
       return { result };
     });
-    if (kept) return kept.result;
+    if (handed) return handed.result;
     return send(said);
   }
   /** A map's pathing: `scenario` is the bare scenario (.chk bytes). */
@@ -371,7 +423,7 @@ var Bridge = class {
       },
       picture: async (at, o = {}) => {
         if (!live()) throw new Error(this.words.sessionOver);
-        return this.ask(o.signal, void 0, (n) => ({ type: "scmjs.sim.picture", id: n, session: id, frame: at }));
+        return this.ask(o.signal, void 0, (n) => ({ type: "scmjs.sim.picture", id: n, session: id, frame: at }), void 0, false);
       },
       close: () => {
         if (!this.sessions.delete(id)) return;
@@ -385,10 +437,13 @@ var Bridge = class {
     const progress = onProgress && ((m) => onProgress({ stage: m.stage === "playing" ? "playing" : "starting", frame: Number(m.frame) || 0, frames: Number(m.frames) || 0 }));
     return this.withModFiles(dataSet, (d, watch) => this.ask(signal, both(watch, progress), (id) => ({ type: "scmjs.sim.fights", id, replay: replay.slice(), fights, options: { ...asked, ...d } }), (r) => r.fights === null ? this.words.noFights : null));
   }
-  /** One request to the page: `message` with its id, answered by a result, an error, or a cancel when `signal` aborts. */
-  async ask(signal, progress, message, refuse) {
+  /**
+   * One request to the page: `message` with its id, answered by a result, an error, or a cancel when `signal` aborts.
+   * `message` is called again, with the same id, when the page loads again before answering (unless `sendAgain` is false).
+   */
+  async ask(signal, progress, message, refuse, sendAgain = true) {
     if (signal?.aborted) throw abortError();
-    const r = await this.open();
+    const r = await this.page();
     if (!r.files) throw new Error(r.why ?? this.words.noFiles);
     const refused = refuse?.(r);
     if (refused) throw new Error(refused);
@@ -404,7 +459,7 @@ var Bridge = class {
       this.pending.set(id, { resolve, reject, progress, done: () => {
         this.pending.delete(id);
         signal?.removeEventListener("abort", stop);
-      } });
+      }, message: sendAgain ? message : null, refuse, again: 0 });
       frame.post(message(id));
     });
   }
@@ -414,6 +469,7 @@ var Bridge = class {
     this.frame?.remove();
     this.frame = null;
     this.ready = null;
+    this.facts = null;
     for (const p of [...this.pending.values()]) {
       p.done();
       p.reject(new Error(this.words.closed));
@@ -456,6 +512,10 @@ var ViewBridge = class {
   debugging = null;
   /** The page's `ready` said it draws a debugged run's pictures. */
   debugs = false;
+  /** The map of the debugged run waiting for `debugged`, sent again to a page that loaded again (0.19.2). */
+  debugMap = null;
+  /** The options waiting for their looks, together: sent again to a page that loaded again (0.19.2). */
+  asked = null;
   errors = /* @__PURE__ */ new Set();
   shown = /* @__PURE__ */ new Set();
   looksWaiting = [];
@@ -505,6 +565,8 @@ var ViewBridge = class {
           this.sources?.note(mods);
           answered(r);
           for (const w of this.readyAgain.splice(0)) w(r);
+          if (this.debugging && this.debugMap) this.frame.post({ type: "scmjs.view.debug", map: this.debugMap.slice() });
+          if (this.looksWaiting.length && this.asked) this.frame.post({ type: "scmjs.view.options", ...this.asked });
           return;
         }
         case "scmjs.view.loaded": {
@@ -525,7 +587,10 @@ var ViewBridge = class {
           const message = String(m.message ?? "");
           const l = this.loading ?? this.debugging;
           if (l === this.loading) this.loading = null;
-          else this.debugging = null;
+          else {
+            this.debugging = null;
+            this.debugMap = null;
+          }
           if (l) l.reject(pageError(m));
           else for (const e of this.errors) e(message);
           return;
@@ -538,6 +603,7 @@ var ViewBridge = class {
         case "scmjs.view.debugged": {
           const d = this.debugging;
           this.debugging = null;
+          this.debugMap = null;
           d?.resolve({ map: { width: Number(m.map?.width) || 0, height: Number(m.map?.height) || 0 } });
           return;
         }
@@ -548,11 +614,12 @@ var ViewBridge = class {
         }
         case "scmjs.view.looks": {
           const l = looksOf(m);
+          this.asked = null;
           for (const w of this.looksWaiting.splice(0)) w(l);
           return;
         }
         case "scmjs.view.frame": {
-          const f = { frame: Number(m.frame) || 0, playing: m.playing === true, seeking: typeof m.seeking === "number" ? m.seeking : null };
+          const f = { frame: Number(m.frame) || 0, playing: m.playing === true, seeking: typeof m.seeking === "number" ? m.seeking : null, ...typeof m.target === "number" && Number.isFinite(m.target) ? { target: m.target } : {} };
           for (const l of this.frames) l(f);
           return;
         }
@@ -600,6 +667,9 @@ var ViewBridge = class {
     if (!r.files) throw new Error(r.reason ?? this.words.noFiles);
     this.loading?.reject(new Error(this.words.replaced));
     this.loading = null;
+    this.debugging?.reject(new Error(this.words.replaced));
+    this.debugging = null;
+    this.debugMap = null;
     const ticket = ++this.loads, at = viewAddress(this.base, dataSet);
     if (at !== this.at) await this.goTo(at, ticket);
     const message = { type: "scmjs.view.load", replay: replay.slice(), name };
@@ -674,11 +744,13 @@ var ViewBridge = class {
     this.loading = null;
     this.debugging?.reject(new Error(this.words.replaced));
     this.debugging = null;
+    this.debugMap = null;
     const ticket = ++this.loads;
     if (this.at !== this.base) await this.goTo(this.base, ticket);
     return new Promise((resolve, reject) => {
       this.debugging = { resolve, reject };
-      this.frame.post({ type: "scmjs.view.debug", map: map.slice() });
+      this.debugMap = map.slice();
+      this.frame.post({ type: "scmjs.view.debug", map: this.debugMap.slice() });
     });
   }
   /** Draws a picture of the debugged run (`ScmSimDebugSession.picture`); `onShown` hears when it is up. */
@@ -718,6 +790,7 @@ var ViewBridge = class {
     if (this.closed) return Promise.reject(new Error(this.words.closed));
     return new Promise((resolve) => {
       this.looksWaiting.push(resolve);
+      this.asked = { ...this.asked, ...o };
       this.frame.post({ type: "scmjs.view.options", ...o });
     });
   }
@@ -758,7 +831,9 @@ var ViewBridge = class {
     this.loading = null;
     this.debugging?.reject(new Error(this.words.closed));
     this.debugging = null;
+    this.debugMap = null;
     this.looksWaiting.length = 0;
+    this.asked = null;
     for (const w of this.readyAgain.splice(0)) w(null);
     this.errors.clear();
     this.shown.clear();
@@ -1433,6 +1508,8 @@ var PlayTab = class {
   /** The answer the tab is waiting to give (resolved by `started`/`shown`, or rejected). */
   answer = null;
   waiting = null;
+  /** Ends the keeping a hand-over with a mod's files marked: the page that took them loaded again (0.19.2). */
+  keepingOver = null;
   address;
   words;
   heard = (e) => {
@@ -1446,6 +1523,8 @@ var PlayTab = class {
       this.said = featuresOf(m.features);
       this.mods = pageModsOf(m.mods);
       this.sources?.note(this.mods);
+      this.keepingOver?.();
+      this.keepingOver = null;
       this.hand();
     } else if (m.type === "scmjs.play.started" || m.type === "scmjs.play.shown") {
       this.waiting?.resolve(m.type === "scmjs.play.shown" ? "shown" : "started");
@@ -1489,7 +1568,13 @@ var PlayTab = class {
     const tab = this.tab, answer = this.answer, hash = h.dataSet?.hash ?? "";
     void fetching.then((files2) => {
       if (this.handing !== h || this.tab !== tab || !this.ready) return;
-      if (files2 && answer && /^[0-9a-f]{16}$/.test(hash)) this.sources?.markKeeping(hash, answer);
+      if (files2 && answer && /^[0-9a-f]{16}$/.test(hash) && this.sources) {
+        this.keepingOver?.();
+        const over = new Promise((resolve) => {
+          this.keepingOver = resolve;
+        });
+        this.sources.markKeeping(hash, Promise.race([answer, over]));
+      }
       this.post(h, files2);
     }, (err) => {
       if (this.handing === h) {
@@ -1666,6 +1751,7 @@ var KO = {
   "The game view cannot draw a debugged run yet. Reload the editor and try again.": "\uAC8C\uC784 \uBCF4\uAE30\uAC00 \uC544\uC9C1 \uB514\uBC84\uADF8 \uC911\uC778 \uC2E4\uD589\uC744 \uADF8\uB9B4 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4. \uD3B8\uC9D1\uAE30\uB97C \uC0C8\uB85C \uACE0\uCE5C \uB4A4 \uB2E4\uC2DC \uC2DC\uB3C4\uD558\uC138\uC694.",
   "A test of several players runs a copy of the game for each, which needs memory shared between them: this browser does not allow that on the engine's page (Chrome and Edge from version 137 do), or the page is from before it.": "\uC5EC\uB7EC \uD50C\uB808\uC774\uC5B4\uC758 \uD14C\uC2A4\uD2B8\uB294 \uD50C\uB808\uC774\uC5B4\uB9C8\uB2E4 \uAC8C\uC784\uC744 \uD558\uB098\uC529 \uC2E4\uD589\uD558\uBA70, \uC774 \uAC8C\uC784\uB4E4\uC740 \uBA54\uBAA8\uB9AC\uB97C \uACF5\uC720\uD574\uC57C \uD569\uB2C8\uB2E4. \uC774 \uBE0C\uB77C\uC6B0\uC800\uB294 \uC5D4\uC9C4 \uD398\uC774\uC9C0\uC5D0\uC11C \uC774\uB97C \uD5C8\uC6A9\uD558\uC9C0 \uC54A\uAC70\uB098(Chrome\uACFC Edge\uB294 137 \uBC84\uC804\uBD80\uD130 \uD5C8\uC6A9\uD569\uB2C8\uB2E4) \uD398\uC774\uC9C0\uAC00 \uADF8\uBCF4\uB2E4 \uC624\uB798\uB418\uC5C8\uC2B5\uB2C8\uB2E4.",
   "The engine's page cannot play a fight again yet. Reload the editor and try again.": "\uC5D4\uC9C4 \uD398\uC774\uC9C0\uAC00 \uC544\uC9C1 \uC804\uD22C\uB97C \uB2E4\uC2DC \uC7AC\uC0DD\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4. \uD3B8\uC9D1\uAE30\uB97C \uC0C8\uB85C \uACE0\uCE5C \uB4A4 \uB2E4\uC2DC \uC2DC\uB3C4\uD558\uC138\uC694.",
+  "The engine's page kept loading again before it could answer. Reload the editor and try again.": "\uC5D4\uC9C4 \uD398\uC774\uC9C0\uAC00 \uC751\uB2F5\uD558\uAE30 \uC804\uC5D0 \uACC4\uC18D \uB2E4\uC2DC \uB85C\uB4DC\uB418\uC5C8\uC2B5\uB2C8\uB2E4. \uD3B8\uC9D1\uAE30\uB97C \uC0C8\uB85C \uACE0\uCE5C \uB4A4 \uB2E4\uC2DC \uC2DC\uB3C4\uD558\uC138\uC694.",
   "Another replay was loaded in its place.": "\uADF8 \uC790\uB9AC\uC5D0 \uB2E4\uB978 \uB9AC\uD50C\uB808\uC774\uB97C \uBD88\uB7EC\uC654\uC2B5\uB2C8\uB2E4.",
   "The game view was closed.": "\uAC8C\uC784 \uD654\uBA74\uC774 \uB2EB\uD614\uC2B5\uB2C8\uB2E4.",
   "The engine's page did not answer.": "\uC5D4\uC9C4 \uD398\uC774\uC9C0\uAC00 \uC751\uB2F5\uD558\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4.",
@@ -1737,7 +1823,8 @@ function activate(api) {
     noDebug: t("The engine's page cannot debug a test in the game yet. Reload the editor and try again."),
     sessionOver: t("That debugging session is over."),
     noCopies: t("A test of several players runs a copy of the game for each, which needs memory shared between them: this browser does not allow that on the engine's page (Chrome and Edge from version 137 do), or the page is from before it."),
-    noFights: t("The engine's page cannot play a fight again yet. Reload the editor and try again.")
+    noFights: t("The engine's page cannot play a fight again yet. Reload the editor and try again."),
+    reloading: t("The engine's page kept loading again before it could answer. Reload the editor and try again.")
   }, void 0, sources);
   const tab = address && new PlayTab(address, {
     blocked: t("The browser did not let the play page open. Allow pop-ups for this site and try again."),
