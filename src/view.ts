@@ -6,7 +6,7 @@
  *   → `{ type: "scmjs.view.load", replay, name }`                 ← `loaded {…}` or `error {message}`
  *   → `play {playing}`, `speed {multiplier}`, `seek {frame}`, `camera {x, y}`, `follow {track}`, `player {slot}`
  *   → `options {fog?, sound?, volume?, music?, duck?, remastered?, lighting?, console?}`   ← `looks {…}`
- *   ← `frame {frame, playing, seeking}`, `camera {x, y, width, height, byUser}`, `key {key, code, …}`
+ *   ← `frame {frame, playing, seeking, target?}`, `camera {x, y, width, height, byUser}`, `key {key, code, …}`
  *   → `debug {map}` (a page whose `ready` says `debug`)          ← `debugged {map}` or `error {message}`
  *   → `show {kept}`                                              ← `shown {frame}`, or `error {message}` (said to `onError`)
  *
@@ -23,6 +23,9 @@
  * registered under its hash), and the page keeps them, says how far it is (`scmjs.view.keeping`), loads itself again on
  * the mod and answers the `load` from there. With no files it answers `error` with `reason` "mod-missing". A page from
  * before is spoken to as before.
+ *
+ * What the page does not take across a load of its own, a debugged run's map and options waiting for their looks, is
+ * sent again when it says ready again (0.19.2): the new page knows nothing of them, and they would wait for ever.
  */
 import type { Disposable, ReplayDataSet, ScmSimPicture, ScmSimView, ViewCamera, ViewFrame, ViewHover, ViewHoverUnit, ViewKey, ViewKeeping, ViewLooks, ViewOptions, ViewPointer, ViewReady, ViewTrack, ViewUnits, ViewWheel, ViewedReplay } from "../contract";
 import { viewAddress } from "./address";
@@ -63,6 +66,10 @@ export class ViewBridge implements ScmSimView {
   private debugging: { resolve(r: { map: { width: number; height: number } }): void; reject(e: Error): void } | null = null;
   /** The page's `ready` said it draws a debugged run's pictures. */
   private debugs = false;
+  /** The map of the debugged run waiting for `debugged`, sent again to a page that loaded again (0.19.2). */
+  private debugMap: Uint8Array | null = null;
+  /** The options waiting for their looks, together: sent again to a page that loaded again (0.19.2). */
+  private asked: ViewOptions | null = null;
   private readonly errors = new Set<Listener<string>>();
   private readonly shown = new Set<Listener<number>>();
   private readonly looksWaiting: ((l: ViewLooks) => void)[] = [];
@@ -111,6 +118,10 @@ export class ViewBridge implements ScmSimView {
           answered(r);
           // (Said again on every load of the page: the frame pointed at another address, or the page loading itself again.)
           for (const w of this.readyAgain.splice(0)) w(r);
+          // A replay's load is answered by the new page when it loaded again for it; a debugged run's map and options
+          // waiting for their looks are not, and go again (0.19.2).
+          if (this.debugging && this.debugMap) this.frame.post({ type: "scmjs.view.debug", map: this.debugMap.slice() });
+          if (this.looksWaiting.length && this.asked) this.frame.post({ type: "scmjs.view.options", ...this.asked });
           return;
         }
         case "scmjs.view.loaded": {
@@ -129,7 +140,7 @@ export class ViewBridge implements ScmSimView {
         case "scmjs.view.error": {
           const message = String(m.message ?? "");
           const l = this.loading ?? this.debugging;
-          if (l === this.loading) this.loading = null; else this.debugging = null;
+          if (l === this.loading) this.loading = null; else { this.debugging = null; this.debugMap = null; }
           if (l) l.reject(pageError(m));
           else for (const e of this.errors) e(message);
           return;
@@ -142,12 +153,18 @@ export class ViewBridge implements ScmSimView {
         case "scmjs.view.debugged": {
           const d = this.debugging;
           this.debugging = null;
+          this.debugMap = null;
           d?.resolve({ map: { width: Number((m.map as { width?: unknown } | undefined)?.width) || 0, height: Number((m.map as { height?: unknown } | undefined)?.height) || 0 } });
           return;
         }
         case "scmjs.view.shown": { const f = Number(m.frame) || 0; for (const l of this.shown) l(f); return; }
-        case "scmjs.view.looks": { const l = looksOf(m); for (const w of this.looksWaiting.splice(0)) w(l); return; }
-        case "scmjs.view.frame": { const f: ViewFrame = { frame: Number(m.frame) || 0, playing: m.playing === true, seeking: typeof m.seeking === "number" ? m.seeking : null }; for (const l of this.frames) l(f); return; }
+        case "scmjs.view.looks": { const l = looksOf(m); this.asked = null; for (const w of this.looksWaiting.splice(0)) w(l); return; }
+        case "scmjs.view.frame": {
+          // (`target`, 0.19.2: where a seek or a restart's run is going, a finite number only.)
+          const f: ViewFrame = { frame: Number(m.frame) || 0, playing: m.playing === true, seeking: typeof m.seeking === "number" ? m.seeking : null, ...(typeof m.target === "number" && Number.isFinite(m.target) ? { target: m.target } : {}) };
+          for (const l of this.frames) l(f);
+          return;
+        }
         case "scmjs.view.camera": { const c: ViewCamera = { x: Number(m.x) || 0, y: Number(m.y) || 0, width: Number(m.width) || 0, height: Number(m.height) || 0, byUser: m.byUser === true }; for (const l of this.cameras) l(c); return; }
         case "scmjs.view.units": {
           if (!(m.boxes instanceof Float32Array) || !(m.colours instanceof Uint32Array) || m.boxes.length !== m.colours.length * 4) return;
@@ -186,6 +203,10 @@ export class ViewBridge implements ScmSimView {
     if (!r.files) throw new Error(r.reason ?? this.words.noFiles);
     this.loading?.reject(new Error(this.words.replaced));
     this.loading = null;
+    // (One thing at a time, as `debug` replaces a load: a debugged run's map waiting across this load's address is not answered.)
+    this.debugging?.reject(new Error(this.words.replaced));
+    this.debugging = null;
+    this.debugMap = null;
     // The mod the replay was played with is in the page's address: the frame goes there first when it stands elsewhere.
     const ticket = ++this.loads, at = viewAddress(this.base, dataSet);
     if (at !== this.at) await this.goTo(at, ticket);
@@ -253,12 +274,14 @@ export class ViewBridge implements ScmSimView {
     this.loading = null;
     this.debugging?.reject(new Error(this.words.replaced));
     this.debugging = null;
+    this.debugMap = null;
     // (A map's run is the game's own data: the view's own address, without a mod.)
     const ticket = ++this.loads;
     if (this.at !== this.base) await this.goTo(this.base, ticket);
     return new Promise((resolve, reject) => {
       this.debugging = { resolve, reject };
-      this.frame.post({ type: "scmjs.view.debug", map: map.slice() });
+      this.debugMap = map.slice();
+      this.frame.post({ type: "scmjs.view.debug", map: this.debugMap.slice() });
     });
   }
   /** Draws a picture of the debugged run (`ScmSimDebugSession.picture`); `onShown` hears when it is up. */
@@ -279,6 +302,7 @@ export class ViewBridge implements ScmSimView {
     if (this.closed) return Promise.reject(new Error(this.words.closed));
     return new Promise<ViewLooks>((resolve) => {
       this.looksWaiting.push(resolve);
+      this.asked = { ...this.asked, ...o };
       this.frame.post({ type: "scmjs.view.options", ...o });
     });
   }
@@ -303,7 +327,9 @@ export class ViewBridge implements ScmSimView {
     this.loading = null;
     this.debugging?.reject(new Error(this.words.closed));
     this.debugging = null;
+    this.debugMap = null;
     this.looksWaiting.length = 0;
+    this.asked = null;
     for (const w of this.readyAgain.splice(0)) w(null);
     this.errors.clear(); this.shown.clear();
     this.frames.clear(); this.cameras.clear(); this.keys.clear(); this.units.clear(); this.hovers.clear(); this.wheels.clear(); this.pointers.clear(); this.keepings.clear();

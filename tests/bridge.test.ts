@@ -3,7 +3,7 @@ import type { FightsResult, MeasureResult, PathingResult, ReplayTimeline } from 
 import { analysedDataSet, Bridge, type FrameHost } from "../src/bridge";
 import { ModSources } from "../src/mods";
 
-const WORDS = { noAnswer: "no answer", noFiles: "no files", closed: "closed", noPathing: "no pathing", noMeasure: "no measure", noTests: "no tests", noCopies: "no copies", noDebug: "no debug", sessionOver: "session over", noFights: "no fights" };
+const WORDS = { noAnswer: "no answer", noFiles: "no files", closed: "closed", noPathing: "no pathing", noMeasure: "no measure", noTests: "no tests", noCopies: "no copies", noDebug: "no debug", sessionOver: "session over", noFights: "no fights", reloading: "kept loading" };
 const timeline = (frames: number) => ({ version: 1, frames } as ReplayTimeline);
 
 /** A stand-in for the engine's page: what it was sent, and a way to speak as it. */
@@ -320,5 +320,135 @@ describe("the conversation with the engine's page", () => {
     page.say({ type: "scmjs.sim.result", id: asked.id, timeline: timeline(8073) });
     expect((await got).frames).toBe(8073);
     expect(stages).toEqual(["starting", "keeping", "playing"]);
+  });
+});
+
+describe("a page that loads again with requests waiting (0.19.2)", () => {
+  const HASH = "ac3f86533e4b5a31";
+
+  it("sends a request again to the new page, its progress starting over, and takes the new page's word", async () => {
+    const { page, host } = fakePage({ type: "scmjs.sim.ready", version: 5, files: "copy", features: ["modAnalysis"] });
+    const bridge = new Bridge("u", host, WORDS);
+    const seen: string[] = [];
+    const got = bridge.analyse(new Uint8Array([4, 5, 6]), { name: "a.rep", onProgress: (p) => seen.push(`${p.stage} ${p.frame}/${p.frames}`) });
+    await tick();
+    // As heard on the site: ready, the request taken and started, then ready again from a new document, and nothing.
+    const asked = page.sent[0];
+    page.say({ type: "scmjs.sim.progress", id: asked.id, stage: "starting", frame: 0, frames: 0 });
+    page.say({ type: "scmjs.sim.ready", version: 6, files: "copy", features: ["modAnalysis", "modFiles"], mods: { kept: [HASH], plays: null } });
+    expect(page.sent.map((m) => m.type)).toEqual(["scmjs.sim.analyse", "scmjs.sim.analyse"]);
+    const again = page.sent[1];
+    expect(again.id).toBe(asked.id);
+    expect(again).toMatchObject({ name: "a.rep" });
+    expect([...(again.replay as Uint8Array)]).toEqual([4, 5, 6]);
+    expect(again.replay).not.toBe(asked.replay);
+    // What the new page said is what the bridge says now, and the frame is kept for the request.
+    expect(await bridge.status()).toMatchObject({ timeline: 6, features: ["modAnalysis", "modFiles"], mods: { kept: [HASH], plays: null } });
+    expect(page.opened).toBe(1);
+    page.say({ type: "scmjs.sim.progress", id: asked.id, stage: "playing", frame: 300, frames: 600 });
+    page.say({ type: "scmjs.sim.result", id: asked.id, timeline: timeline(600) });
+    expect((await got).frames).toBe(600);
+    expect(seen).toEqual(["starting 0/0", "starting 0/0", "playing 300/600"]);
+  });
+
+  it("gives a request up when the page keeps loading again with it waiting", async () => {
+    const { page, host } = fakePage({ type: "scmjs.sim.ready", version: 1, pathing: 1, files: "copy" });
+    const bridge = new Bridge("u", host, WORDS);
+    const got = bridge.analyse(new Uint8Array([1]));
+    const other = bridge.pathing(new Uint8Array([1]));
+    await tick();
+    page.say({ type: "scmjs.sim.ready", version: 1, files: "copy" });
+    // (A new page that cannot do what was asked refuses it at once.)
+    await expect(other).rejects.toThrow("no pathing");
+    page.say({ type: "scmjs.sim.ready", version: 1, files: "copy" });
+    expect(page.sent.filter((m) => m.type === "scmjs.sim.analyse").length).toBe(3);
+    page.say({ type: "scmjs.sim.ready", version: 1, files: "copy" });
+    await expect(got).rejects.toThrow("kept loading");
+    expect(page.sent.filter((m) => m.type === "scmjs.sim.analyse").length).toBe(3);
+    // A late answer to it is nobody's, and the next request goes to the page as it is.
+    page.say({ type: "scmjs.sim.result", id: page.sent[0].id, timeline: timeline(1) });
+    const next = bridge.analyse(new Uint8Array([2]));
+    await tick();
+    page.say({ type: "scmjs.sim.result", id: page.sent.at(-1)!.id, timeline: timeline(2) });
+    expect((await next).frames).toBe(2);
+  });
+
+  it("ends a debugger's session whose game was in the page before, sending no picture into the new one", async () => {
+    const { page, host } = fakePage({ type: "scmjs.sim.ready", version: 1, tests: 1, debug: 1, files: "copy" });
+    const bridge = new Bridge("u", host, WORDS);
+    const got = bridge.debug(new Uint8Array([7]), "m", {});
+    await tick();
+    page.say({ type: "scmjs.sim.debugged", id: page.sent[0].id, recording: { frames: 12 } });
+    const session = await got;
+    const waiting = session.picture(3);
+    await tick();
+    expect(page.sent.filter((m) => m.type === "scmjs.sim.picture").length).toBe(1);
+    page.say({ type: "scmjs.sim.ready", version: 1, tests: 1, debug: 1, files: "copy" });
+    await expect(waiting).rejects.toThrow("session over");
+    expect(session.closed).toBe(true);
+    await expect(session.picture(4)).rejects.toThrow("session over");
+    const before = page.sent.length;
+    session.close();
+    expect(page.sent.length).toBe(before);
+    expect(page.sent.filter((m) => m.type === "scmjs.sim.picture").length).toBe(1);
+    // No session holds a game now: a status may load the page afresh.
+    await bridge.status();
+    expect(page.opened).toBe(2);
+  });
+
+  it("hands a mod's files again to a new page that does not keep the mod, and holds the keeping until it is kept", async () => {
+    const { page, host } = fakePage({ type: "scmjs.sim.ready", version: 5, files: "copy", features: ["modFiles", "modAnalysis"], mods: { kept: [], plays: null } });
+    const sources = new ModSources();
+    let gathered = 0;
+    sources.provide(HASH, { files: async () => { gathered++; return [{ path: "arr/units.dat", bytes: new Uint8Array([1]) }]; } });
+    const bridge = new Bridge("u", host, WORDS, 30000, sources);
+    const got = bridge.analyse(new Uint8Array([1]), { dataSet: { hash: HASH } });
+    await tick(); await tick();
+    const asked = page.sent[0];
+    let waited = false;
+    void sources.settled(HASH).then(() => { waited = true; });
+    // Part way through keeping, the page loads again, keeping nothing.
+    page.say({ type: "scmjs.sim.progress", id: asked.id, stage: "starting", frame: 0, frames: 0 });
+    page.say({ type: "scmjs.sim.progress", id: asked.id, stage: "keeping", frame: 0, frames: 0, message: "Keeping…" });
+    page.say({ type: "scmjs.sim.ready", version: 5, files: "copy", features: ["modFiles", "modAnalysis"], mods: { kept: [], plays: null } });
+    const again = page.sent[1] as unknown as { id: number; options: { dataSet: { hash: string; files?: unknown[] } } };
+    expect(again.id).toBe(asked.id);
+    expect(again.options.dataSet.files?.length).toBe(1);
+    // The new page's "starting" is not taken for the end of the keeping the page before had begun.
+    page.say({ type: "scmjs.sim.progress", id: asked.id, stage: "starting", frame: 0, frames: 0 });
+    await tick();
+    expect(waited).toBe(false);
+    expect(sources.isKept(HASH)).toBe(false);
+    page.say({ type: "scmjs.sim.progress", id: asked.id, stage: "keeping", frame: 0, frames: 0, message: "Keeping…" });
+    page.say({ type: "scmjs.sim.progress", id: asked.id, stage: "playing", frame: 1, frames: 10 });
+    await tick();
+    expect(waited).toBe(true);
+    expect(sources.isKept(HASH)).toBe(true);
+    page.say({ type: "scmjs.sim.result", id: asked.id, timeline: timeline(10) });
+    expect((await got).frames).toBe(10);
+    expect(gathered).toBe(1);
+  });
+
+  it("hands no files again to a new page that keeps the mod already, and counts it kept", async () => {
+    const { page, host } = fakePage({ type: "scmjs.sim.ready", version: 5, fights: 1, files: "copy", features: ["modFiles", "modAnalysis"], mods: { kept: [], plays: null } });
+    const sources = new ModSources();
+    sources.provide(HASH, { files: async () => [{ path: "arr/units.dat", bytes: new Uint8Array([1]) }] });
+    const bridge = new Bridge("u", host, WORDS, 30000, sources);
+    const got = bridge.fights(new Uint8Array([1]), [], { tail: 60, dataSet: { hash: HASH } });
+    await tick(); await tick();
+    const asked = page.sent[0];
+    expect((asked.options as { dataSet: { files?: unknown[] } }).dataSet.files?.length).toBe(1);
+    let waited = false;
+    void sources.settled(HASH).then(() => { waited = true; });
+    page.say({ type: "scmjs.sim.progress", id: asked.id, stage: "keeping", frame: 0, frames: 0, message: "Keeping…" });
+    // The page before kept it, then loaded again: the new one says it keeps it.
+    page.say({ type: "scmjs.sim.ready", version: 5, fights: 1, files: "copy", features: ["modFiles", "modAnalysis"], mods: { kept: [HASH], plays: HASH } });
+    expect(page.sent[1]).toMatchObject({ type: "scmjs.sim.fights", id: asked.id });
+    expect(page.sent[1].options).toEqual({ tail: 60, dataSet: { hash: HASH } });
+    await tick();
+    expect(waited).toBe(true);
+    expect(sources.isKept(HASH)).toBe(true);
+    page.say({ type: "scmjs.sim.fought", id: asked.id, result: { version: 1, fights: [] } as unknown as FightsResult });
+    expect((await got).fights).toEqual([]);
   });
 });

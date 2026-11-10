@@ -179,6 +179,41 @@ describe("the game view inside an element", () => {
     expect(await looks).toEqual({ ...LOOKS, remasteredOn: false });
   });
 
+  it("sends a debugged run's map and options waiting for their looks again to a page that loaded again (0.19.2)", async () => {
+    const ready = { type: "scmjs.view.ready", version: 1, debug: 1, files: "copy" };
+    const { page, host } = fakeViewer(ready);
+    const view = new ViewBridge("u", element, host, WORDS);
+    const started = view.debug(new Uint8Array([9]));
+    await tick();
+    const looks = view.options({ fog: false });
+    const more = view.options({ sound: true });
+    expect(page.sent.map((m) => m.type)).toEqual(["scmjs.view.debug", "scmjs.view.options", "scmjs.view.options"]);
+    // The page loads again before answering either: the new page knows nothing of them.
+    page.say(ready);
+    expect(page.sent.slice(3)).toEqual([{ type: "scmjs.view.debug", map: new Uint8Array([9]) }, { type: "scmjs.view.options", fog: false, sound: true }]);
+    page.say({ type: "scmjs.view.debugged", map: { width: 64, height: 64 } });
+    page.say({ type: "scmjs.view.looks", ...LOOKS });
+    expect(await started).toEqual({ map: { width: 64, height: 64 } });
+    expect(await looks).toEqual(LOOKS);
+    expect(await more).toEqual(LOOKS);
+    // Answered, nothing goes again on the next ready.
+    page.say(ready);
+    expect(page.sent.length).toBe(5);
+  });
+
+  it("replaces a debugged run's map waiting with a replay's load (0.19.2)", async () => {
+    const { page, host } = fakeViewer({ type: "scmjs.view.ready", version: 1, debug: 1, files: "copy" });
+    const view = new ViewBridge("u", element, host, WORDS);
+    const started = view.debug(new Uint8Array([9]));
+    await tick();
+    const loaded = view.load(new Uint8Array([1]), "a.rep");
+    await expect(started).rejects.toThrow("replaced");
+    await tick();
+    expect(page.sent.at(-1)).toMatchObject({ type: "scmjs.view.load" });
+    page.say(LOADED);
+    await expect(loaded).resolves.toMatchObject({ frames: 900 });
+  });
+
   it("passes the frame, the camera and the keys on to whoever listens, until they stop", () => {
     const { page, host } = fakeViewer();
     const view = new ViewBridge("u", element, host, WORDS);
@@ -187,13 +222,18 @@ describe("the game view inside an element", () => {
     view.onCamera((x) => cameras.push(x));
     view.onKey((x) => keys.push(x));
     page.say({ type: "scmjs.view.frame", frame: 240, playing: true, seeking: null });
+    // (`target` while a seek is under way, 0.19.2: passed on when it is a finite number, left out otherwise.)
+    page.say({ type: "scmjs.view.frame", frame: 300, playing: false, seeking: 240, target: 9000 });
+    page.say({ type: "scmjs.view.frame", frame: 310, playing: false, seeking: 240, target: null });
+    page.say({ type: "scmjs.view.frame", frame: 320, playing: false, seeking: 240, target: Infinity });
     page.say({ type: "scmjs.view.camera", x: 10, y: 20, width: 640, height: 375, byUser: true });
     page.say({ type: "scmjs.view.key", key: " ", code: "Space", shiftKey: false });
     // (Not the view's: another page's messages, or none of its kind.)
     page.say({ type: "scmjs.sim.ready" });
     f.dispose();
     page.say({ type: "scmjs.view.frame", frame: 480, playing: false, seeking: 240 });
-    expect(frames).toEqual([{ frame: 240, playing: true, seeking: null }]);
+    expect(frames).toEqual([{ frame: 240, playing: true, seeking: null }, { frame: 300, playing: false, seeking: 240, target: 9000 }, { frame: 310, playing: false, seeking: 240 }, { frame: 320, playing: false, seeking: 240 }]);
+    expect("target" in frames[2]).toBe(false);
     expect(cameras).toEqual([{ x: 10, y: 20, width: 640, height: 375, byUser: true }]);
     expect(keys).toEqual([{ key: " ", code: "Space", shiftKey: false, ctrlKey: false, altKey: false, metaKey: false }]);
   });
