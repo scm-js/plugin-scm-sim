@@ -56,6 +56,34 @@ describe("where a mod's files come from (0.19.0)", () => {
     expect(await sources.keepOnce(HASH, async () => "next")).toBe("next");
   });
 
+  it("ends a keeping when the page has kept the mod, though the request goes on (0.19.1)", async () => {
+    const sources = new ModSources();
+    let kept!: () => void, finish!: () => void;
+    const request = sources.keepOnce(HASH, (k) => { kept = k; return new Promise<string>((r) => { finish = () => r("analysed"); }); });
+    let waited = false;
+    const waiting = sources.settled(HASH).then(() => { waited = true; });
+    await tick();
+    expect(waited).toBe(false);
+    kept();
+    await waiting;
+    expect(waited).toBe(true);
+    // (the request itself is still running, and a keeping asked for now runs: nothing is being kept)
+    expect(await sources.keepOnce(HASH, async () => "next")).toBe("next");
+    finish();
+    expect(await request).toBe("analysed");
+  });
+
+  it("tells whoever waits for a keeping how far the page is, until they stop listening", () => {
+    const sources = new ModSources();
+    const heard: string[] = [];
+    const hearing = sources.hear(HASH, (m) => heard.push(m));
+    sources.say(HASH, "Keeping the mod's files: 10 of 20…");
+    sources.say(OTHER, "another mod");
+    hearing.dispose();
+    sources.say(HASH, "not heard");
+    expect(heard).toEqual(["Keeping the mod's files: 10 of 20…"]);
+  });
+
   it("reads what a page says it keeps, and the page's reason beside its sentence", () => {
     expect(pageModsOf({ kept: [HASH, "nope", 3], plays: OTHER })).toEqual({ kept: [HASH], plays: OTHER });
     expect(pageModsOf(undefined)).toBeNull();

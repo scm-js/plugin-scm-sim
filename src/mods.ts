@@ -55,6 +55,8 @@ export class ModSources {
   private readonly kept = new Set<string>();
   /** A page keeping a hash now: the promise settles when it is done (kept or not). */
   private readonly keeping = new Map<string, Promise<void>>();
+  /** Who hears how far a page is with keeping a hash (another page's request waiting for it). */
+  private readonly hearing = new Map<string, Set<(message: string) => void>>();
 
   /** A mod's files, found by its hash from now until disposed. */
   provide(hash: string, mod: ProvidedMod): Disposable {
@@ -109,16 +111,31 @@ export class ModSources {
   /**
    * `run` as the one keeping of `hash` at a time: it sends the files and resolves once the page kept them (or could
    * not). A second keeping of the same hash meanwhile waits for the first and is not run: `null` comes back, and the
-   * caller goes without files.
+   * caller goes without files. `run` is handed `kept`, to call once the page has kept the mod when its own work goes
+   * on after that (an analysis plays the whole replay next): whoever waits for the keeping goes on from then, not
+   * from the end of `run`.
    */
-  async keepOnce<T>(hash: string, run: () => Promise<T>): Promise<T | null> {
+  async keepOnce<T>(hash: string, run: (kept: () => void) => Promise<T>): Promise<T | null> {
     const busy = this.keeping.get(hash);
     if (busy) { await busy.catch(() => {}); return null; }
-    const going = run();
-    const done = going.then(() => {}, () => {});
+    let kept!: () => void;
+    const early = new Promise<void>((resolve) => { kept = resolve; });
+    const going = run(kept);
+    const done = Promise.race([early, going.then(() => {}, () => {})]);
     this.keeping.set(hash, done);
     void done.then(() => { if (this.keeping.get(hash) === done) this.keeping.delete(hash); });
     return going;
+  }
+
+  /** A page keeping `hash` said how far it is, in words: told to whoever waits for that keeping. */
+  say(hash: string, message: string): void { for (const l of [...(this.hearing.get(hash) ?? [])]) l(message); }
+
+  /** Hears how far a page keeping `hash` is, until disposed. */
+  hear(hash: string, listener: (message: string) => void): Disposable {
+    const set = this.hearing.get(hash) ?? new Set();
+    set.add(listener);
+    this.hearing.set(hash, set);
+    return { dispose: () => { set.delete(listener); if (!set.size && this.hearing.get(hash) === set) this.hearing.delete(hash); } };
   }
 
   /** Marks `hash` as being kept by a page until `done` settles (a page that keeps across a load of its own). */
