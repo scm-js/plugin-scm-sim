@@ -21,6 +21,29 @@ function playAddress(play, live) {
 // src/features.ts
 var featuresOf = (v) => Array.isArray(v) ? v.filter((f) => typeof f === "string") : [];
 
+// src/races.ts
+function validRaces(value) {
+  if (!Array.isArray(value)) return [];
+  const seen = /* @__PURE__ */ new Set(), out = [];
+  for (const row of value) {
+    if (!row || typeof row !== "object" || Array.isArray(row)) continue;
+    const r = row;
+    if (typeof r.id !== "number" || !Number.isInteger(r.id) || r.id < 8 || r.id > 255 || seen.has(r.id) || typeof r.name !== "string") continue;
+    const name = r.name.trim();
+    if (!name || name.length > 40) continue;
+    const kept = { ...r, id: r.id, name };
+    if (!(typeof r.letter === "string" && /^[a-z]$/.test(r.letter))) delete kept.letter;
+    if (!(r.like === 0 || r.like === 1 || r.like === 2)) delete kept.like;
+    seen.add(r.id);
+    out.push(kept);
+  }
+  return out.sort((a, b) => a.id - b.id);
+}
+var racesOf = (value) => {
+  const races = validRaces(value);
+  return races.length ? { races } : {};
+};
+
 // src/mods.ts
 var HASH = /^[0-9a-f]{16}$/;
 function pageModsOf(v) {
@@ -177,7 +200,9 @@ function analysedDataSet(set) {
     hash: set.hash,
     ...typeof set.name === "string" && set.name.trim() ? { name: set.name.trim() } : {},
     ...typeof set.url === "string" && /^https?:\/\/\S+$/i.test(set.url) ? { url: set.url } : {},
-    ...set.live === true ? { live: true } : {}
+    ...set.live === true ? { live: true } : {},
+    // (the races the data set adds, 0.20.0: a page from before reads no such field)
+    ...racesOf(set.races)
   };
 }
 var AGAIN = 2;
@@ -676,6 +701,7 @@ var ViewBridge = class {
     const message = { type: "scmjs.view.load", replay: replay.slice(), name };
     const said = analysedDataSet(dataSet), page = this.latest;
     let handing = null;
+    if (said && !this.sources && (page.features ?? []).includes("races")) message.dataSet = { ...said };
     if (said && this.sources && (page.features ?? []).includes("modFiles")) {
       const hash = said.hash, sent = { ...said };
       message.dataSet = sent;
@@ -1663,7 +1689,7 @@ var PlayTab = class {
   async playMod(test, how) {
     if (!this.open()) throw new Error(this.words.blocked);
     const { map, mod, useMapSettings } = await test;
-    this.handing = { bytes: map?.bytes ?? null, name: map?.name ?? mod.name, how: useMapSettings === void 0 ? how : { ...how, useMapSettings }, dataSet: { id: mod.name, name: mod.name, hash: mod.hash, files: mod.files } };
+    this.handing = { bytes: map?.bytes ?? null, name: map?.name ?? mod.name, how: useMapSettings === void 0 ? how : { ...how, useMapSettings }, dataSet: { id: mod.name, name: mod.name, hash: mod.hash, files: mod.files, ...racesOf(mod.races) } };
     return this.handOver();
   }
   /**
@@ -1690,7 +1716,7 @@ function pageDataSet(d) {
 }
 function validReplayDataSet(set) {
   if (!set || typeof set !== "object") return null;
-  const { hash, name, url, files: files2, live } = set;
+  const { hash, name, url, files: files2, live, races } = set;
   const good = typeof hash === "string" && /^[0-9a-f]{16}$/.test(hash) ? hash : "";
   const kept = Array.isArray(files2) ? files2.filter((f) => !!f && typeof f.path === "string" && !!f.path && f.bytes instanceof Uint8Array) : [];
   const source = typeof files2 === "function" ? files2 : void 0;
@@ -1700,14 +1726,15 @@ function validReplayDataSet(set) {
     ...typeof name === "string" && name.trim() ? { name: name.trim() } : {},
     ...typeof url === "string" && /^https?:\/\/\S+$/i.test(url) ? { url } : {},
     ...kept.length ? { files: kept } : source ? { files: source } : {},
-    ...live === true ? { live: true } : {}
+    ...live === true ? { live: true } : {},
+    ...racesOf(races)
   };
 }
 function validDataSet(set) {
   if (!set || typeof set !== "object") return null;
-  const { id, name, hash } = set;
+  const { id, name, hash, races } = set;
   if (typeof id !== "string" || !id) return null;
-  return { id, name: typeof name === "string" && name ? name : id, hash: typeof hash === "string" ? hash : "" };
+  return { id, name: typeof name === "string" && name ? name : id, hash: typeof hash === "string" ? hash : "", ...racesOf(races) };
 }
 
 // src/target.ts
@@ -1839,7 +1866,8 @@ function activate(api) {
     const profile = api.gameData.profile();
     if (profile.id === "starcraft") return {};
     const hash = api.gameData.source()?.hash ?? "";
-    return { dataSet: { id: profile.id, name: profile.name, hash } };
+    const races = racesOf(profile.races ?? api.gameData.source()?.profile?.races);
+    return { dataSet: { id: profile.id, name: profile.name, hash, ...races } };
   };
   const test = (map) => {
     if (!tab) throw absent();
