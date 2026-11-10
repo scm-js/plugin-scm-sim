@@ -132,6 +132,7 @@ export class ViewBridge implements ScmSimView {
             players: Array.isArray(m.players) ? (m.players as { slot: number; name: string; race: number }[]).map((p) => ({ slot: Number(p.slot), name: String(p.name ?? ""), race: Number(p.race) })) : [],
             map: { width: Number((m.map as { width?: unknown } | undefined)?.width) || 0, height: Number((m.map as { height?: unknown } | undefined)?.height) || 0 },
             rewinds: m.rewinds === true,
+            ...(m.slow === true ? { slow: true } : {}),
             looks: looksOf((m.looks ?? {}) as Record<string, unknown>),
             follows: m.follows === true,
           });

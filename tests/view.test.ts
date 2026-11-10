@@ -87,6 +87,12 @@ describe("the game view inside an element", () => {
     await tick();
     page.say({ ...LOADED, follows: true });
     expect(await again).toMatchObject({ follows: true });
+    expect(await again).not.toHaveProperty("slow");
+    // (A mod's replay whose plugins run says it is slow; 0.19.2.)
+    const slow = view.load(bytes, "a.rep");
+    await tick();
+    page.say({ ...LOADED, slow: true });
+    expect(await slow).toMatchObject({ rewinds: true, slow: true });
   });
 
   it("rejects a load the page could not play, one replaced by another, and one with no game files", async () => {

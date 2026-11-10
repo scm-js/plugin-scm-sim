@@ -393,6 +393,10 @@ The rest of the view, in short (`contract.d.ts` has the details):
   how much of the map shows top to bottom, from 240 to 1920 pixels (960 before 0.9.0). It
   works only while the console is hidden, which it is unless you ask for
   `options({ console: true })`.
+- `load` answers with the replay's `name`, `frames`, `players` and `map`, its `looks`, `follows`
+  and `rewinds` (whether a seek back is quick). Since 0.19.2 it also says `slow: true` for a
+  replay that runs ahead slowly because a mod's plugins run (about 60 frames a second): even a
+  seek back takes a while there, so send a drag's seeks sparingly, one when it ends.
 - `onFrame` gives the frame shown, whether it plays, and while a seek runs, `seeking`. Since
   0.19.2 it also gives `target`, the frame a seek (or a restart's run) is going to, while one is
   under way; a page from before leaves it out.
