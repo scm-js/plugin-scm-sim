@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { FightsResult, MeasureResult, PathingResult, ReplayTimeline } from "../contract";
 import { analysedDataSet, Bridge, type FrameHost } from "../src/bridge";
+import { ModSources } from "../src/mods";
 
 const WORDS = { noAnswer: "no answer", noFiles: "no files", closed: "closed", noPathing: "no pathing", noMeasure: "no measure", noTests: "no tests", noCopies: "no copies", noDebug: "no debug", sessionOver: "session over", noFights: "no fights" };
 const timeline = (frames: number) => ({ version: 1, frames } as ReplayTimeline);
@@ -288,5 +289,36 @@ describe("the conversation with the engine's page", () => {
     bridge.close();
     await expect(got).rejects.toThrow("closed");
     expect(page.removed).toBe(1);
+  });
+  it("counts a mod handed over as kept once the page is past keeping, not when the analysis ends (0.19.1)", async () => {
+    const HASH = "ac3f86533e4b5a31";
+    const { page, host } = fakePage({ type: "scmjs.sim.ready", version: 5, files: "copy", features: ["modFiles", "modAnalysis"], mods: { kept: [], plays: null } });
+    const sources = new ModSources();
+    sources.provide(HASH, { name: "A mod", files: async () => [{ path: "arr/units.dat", bytes: new Uint8Array([1]) }] });
+    const bridge = new Bridge("u", host, WORDS, 30000, sources);
+    const stages: string[] = [];
+    const got = bridge.analyse(new Uint8Array([1]), { dataSet: { hash: HASH }, onProgress: (p) => stages.push(p.stage) });
+    await tick(); await tick();
+    const asked = page.sent.find((m) => m.type === "scmjs.sim.analyse")!;
+    expect(((asked.options as { dataSet: { files: unknown[] } }).dataSet.files).length).toBe(1);
+    let waited = false;
+    const heard: string[] = [];
+    sources.hear(HASH, (m) => heard.push(m));
+    void sources.settled(HASH).then(() => { waited = true; });
+    // The page starts, keeps (saying how far), and only then plays: "starting" alone says nothing of the keeping.
+    page.say({ type: "scmjs.sim.progress", id: asked.id, stage: "starting", frame: 0, frames: 0 });
+    page.say({ type: "scmjs.sim.progress", id: asked.id, stage: "keeping", frame: 0, frames: 0, message: "Keeping the mod's files: 1 of 1…" });
+    await tick();
+    expect(waited).toBe(false);
+    expect(sources.isKept(HASH)).toBe(false);
+    expect(heard).toEqual(["Keeping the mod's files: 1 of 1…"]);
+    page.say({ type: "scmjs.sim.progress", id: asked.id, stage: "playing", frame: 500, frames: 8073 });
+    await tick();
+    expect(waited).toBe(true);
+    expect(sources.isKept(HASH)).toBe(true);
+    // The analysis goes on, and its caller heard every stage as before.
+    page.say({ type: "scmjs.sim.result", id: asked.id, timeline: timeline(8073) });
+    expect((await got).frames).toBe(8073);
+    expect(stages).toEqual(["starting", "keeping", "playing"]);
   });
 });

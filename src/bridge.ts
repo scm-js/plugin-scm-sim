@@ -93,6 +93,12 @@ interface Ready { version: number | null; pathing: number | null; measure: numbe
 type Heard = { stage?: unknown; frame?: unknown; frames?: unknown; done?: unknown; total?: unknown; message?: unknown };
 interface Pending { resolve(v: unknown): void; reject(e: Error): void; progress?(m: Heard): void; done(): void }
 
+/** Two listeners to the page's progress as one: `first` hears each message before `then`. Either may be absent. */
+function both(first: ((m: Heard) => void) | undefined, then: ((m: Heard) => void) | undefined): ((m: Heard) => void) | undefined {
+  if (!first || !then) return first ?? then;
+  return (m) => { first(m); then(m); };
+}
+
 export function abortError(): Error {
   const e = new Error("The analysis was stopped.");
   e.name = "AbortError";
@@ -169,26 +175,41 @@ export class Bridge {
 
   async analyse(replay: Uint8Array, options: AnalyseOptions = {}): Promise<ReplayTimeline> {
     const progress = options.onProgress && ((m: Heard) => options.onProgress!({ stage: m.stage === "playing" ? "playing" : m.stage === "keeping" ? "keeping" : "starting", frame: Number(m.frame) || 0, frames: Number(m.frames) || 0, ...(m.stage === "keeping" && typeof m.message === "string" ? { message: m.message } : {}) }));
-    return this.withModFiles(options.dataSet, (dataSet) =>
+    return this.withModFiles(options.dataSet, (dataSet, watch) =>
       // (A copy: the caller keeps its bytes.)
-      this.ask<ReplayTimeline>(options.signal, progress, (id) => ({ type: "scmjs.sim.analyse", id, replay: replay.slice(), name: options.name, options: { sampleEvery: options.sampleEvery, positionsEvery: options.positionsEvery, ...dataSet } })));
+      this.ask<ReplayTimeline>(options.signal, both(watch, progress), (id) => ({ type: "scmjs.sim.analyse", id, replay: replay.slice(), name: options.name, options: { sampleEvery: options.sampleEvery, positionsEvery: options.positionsEvery, ...dataSet } })));
   }
 
   /**
    * A request that names a mod (0.19.0, a page whose `ready` says "modFiles"): its files go with it when the page does
    * not keep the mod and they can be found (`ModSources`), once for the site — a request while another page keeps the
    * same mod waits for that, then goes without them. Otherwise the data set goes as before 0.19.0, without files.
+   *
+   * The wait is for the keeping, not for the request (0.19.1): the page keeps the mod and then plays the whole replay,
+   * minutes for a long one, and the view of the same replay waited all of that for a mod kept in the first one. `send`
+   * is handed `watch` for the page's progress: once the page is past keeping (it says another stage after "keeping", or
+   * "playing"), the mod counts as kept and whoever waits goes on. What it says while keeping is told to them (`say`).
    */
-  private async withModFiles<T>(set: ReplayDataSet | null | undefined, send: (dataSet: { dataSet?: Record<string, unknown> }) => Promise<T>): Promise<T> {
+  private async withModFiles<T>(set: ReplayDataSet | null | undefined, send: (dataSet: { dataSet?: Record<string, unknown> }, watch?: (m: Heard) => void) => Promise<T>): Promise<T> {
     const said = withDataSet(set);
     const r = said.dataSet && this.sources && set ? await this.open().catch(() => null) : null;
     if (!r || !r.features.includes("modFiles") || !said.dataSet || !this.sources || !set) return send(said);
     const sources = this.sources, hash = said.dataSet.hash;
     await sources.settled(hash);
     if (pageKeeps(r.mods, hash) || sources.isKept(hash) || !sources.has(set)) return send(said);
-    const kept = await sources.keepOnce(hash, async () => {
+    const kept = await sources.keepOnce(hash, async (pageKept) => {
       const files = await sources.files(set);
-      const result = await send({ dataSet: { ...said.dataSet, ...(files ? { files } : {}) } });
+      let keeping = false, past = false;
+      const watch = files ? (m: Heard) => {
+        if (past) return;
+        if (m.stage === "keeping") { keeping = true; if (typeof m.message === "string") sources.say(hash, m.message); return; }
+        // (The page says "starting" before it keeps: alone it tells nothing. After "keeping", or "playing", the mod is kept.)
+        if (!keeping && m.stage !== "playing") return;
+        past = true;
+        sources.noteKept(hash);
+        pageKept();
+      } : undefined;
+      const result = await send({ dataSet: { ...said.dataSet, ...(files ? { files } : {}) } }, watch);
       if (files) sources.noteKept(hash);
       return { result };
     });
@@ -253,7 +274,7 @@ export class Bridge {
   async fights(replay: Uint8Array, fights: FightAsk[], options: FightsOptions = {}): Promise<FightsResult> {
     const { signal, onProgress, dataSet, ...asked } = options;
     const progress = onProgress && ((m: Heard) => onProgress({ stage: m.stage === "playing" ? "playing" : "starting", frame: Number(m.frame) || 0, frames: Number(m.frames) || 0 } satisfies FightsProgress));
-    return this.withModFiles(dataSet, (d) => this.ask<FightsResult>(signal, progress, (id) => ({ type: "scmjs.sim.fights", id, replay: replay.slice(), fights, options: { ...asked, ...d } }), (r) => (r.fights === null ? this.words.noFights : null)));
+    return this.withModFiles(dataSet, (d, watch) => this.ask<FightsResult>(signal, both(watch, progress), (id) => ({ type: "scmjs.sim.fights", id, replay: replay.slice(), fights, options: { ...asked, ...d } }), (r) => (r.fights === null ? this.words.noFights : null)));
   }
 
   /** One request to the page: `message` with its id, answered by a result, an error, or a cancel when `signal` aborts. */

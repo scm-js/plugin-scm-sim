@@ -196,8 +196,10 @@ export class ViewBridge implements ScmSimView {
     if (said && this.sources && (page.features ?? []).includes("modFiles")) {
       const hash = said.hash, sent: Record<string, unknown> = { ...said };
       message.dataSet = sent;
-      // (Another page keeping it now: waited for, then this page finds what it kept.)
-      await this.sources.settled(hash);
+      // (Another page keeping it now: waited for, then this page finds what it kept. How far that page is, is said as
+      // this view's own keeping would be: 0.19.1.)
+      const hearing = this.sources.hear(hash, (said) => { const k: ViewKeeping = { hash, message: said }; for (const l of this.keepings) l(k); });
+      try { await this.sources.settled(hash); } finally { hearing.dispose(); }
       if (ticket !== this.loads) throw new Error(this.words.replaced);
       if (!pageKeeps(page.mods ?? null, hash) && !this.sources.isKept(hash) && this.sources.has(dataSet)) {
         const files = await this.sources.files(dataSet);

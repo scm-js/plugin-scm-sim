@@ -426,6 +426,10 @@ folder's layout as it reads a folder dropped on it. The page keeps the mod as it
 dropped one, under the hash it works out itself, and also answers to the hash it was handed
 it by when the two differ. Every page of the site keeps mods in the same place, so a mod is
 kept once: while one page keeps it, another request for it waits, then goes without files.
+The wait is for the keeping alone (since 0.19.1): an analysis that keeps the mod goes on to
+play the whole replay, and the game view of the same replay loads as soon as the mod is kept,
+not when the analysis ends. While it waits, the view says how far the keeping is
+(`onKeeping`), as it does when it keeps the mod itself.
 A caller's own `dataSet.files` (a list, or a function returning one) come before the
 registered mod.
 
