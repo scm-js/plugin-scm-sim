@@ -472,8 +472,9 @@ reads "Race 69".
 
 A data set may name the races it adds, beside its name and never in its hashed files, so naming
 a race does not change the mod's hash. Pass them as `races` on any `dataSet` (`analyse`,
-`fights`, `view().load`, `playReplay`) and the Test in Browser hand-over passes the editor's
-data set's own (`GameDataProfile.races`, where the editor has them):
+`fights`, `view().load`, `playReplay`, and the `mod` of `scm-sim.live`'s `play`), and the Test in
+Browser hand-over passes the editor's data set's own (`GameDataProfile.races`, where the editor
+has them):
 
 ```ts
 await sim.analyse(bytes, {

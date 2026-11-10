@@ -1060,4 +1060,4 @@ export interface ScmSimLiveService {
   play(test: LiveTest | Promise<LiveTest>): Promise<"started" | "shown">;
 }
 /** What `ScmSimLiveService.play` hands over. */
-export interface LiveTest { map: { bytes: Uint8Array; name: string } | null; mod: { name: string; hash: string; files: LiveFile[] }; useMapSettings?: boolean }
+export interface LiveTest { map: { bytes: Uint8Array; name: string } | null; mod: { name: string; hash: string; files: LiveFile[]; /** The races the mod adds (0.20.0), passed to the page with its data set. */ races?: DataSetRace[] }; useMapSettings?: boolean }

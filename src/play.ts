@@ -200,7 +200,7 @@ export class PlayTab {
   async playMod(test: Promise<LiveTest>, how: PlayHow): Promise<PlayOutcome> {
     if (!this.open()) throw new Error(this.words.blocked);
     const { map, mod, useMapSettings } = await test;
-    this.handing = { bytes: map?.bytes ?? null, name: map?.name ?? mod.name, how: useMapSettings === undefined ? how : { ...how, useMapSettings }, dataSet: { id: mod.name, name: mod.name, hash: mod.hash, files: mod.files } };
+    this.handing = { bytes: map?.bytes ?? null, name: map?.name ?? mod.name, how: useMapSettings === undefined ? how : { ...how, useMapSettings }, dataSet: { id: mod.name, name: mod.name, hash: mod.hash, files: mod.files, ...racesOf(mod.races) } };
     return this.handOver();
   }
 
