@@ -578,6 +578,7 @@ var ViewBridge = class {
             players: Array.isArray(m.players) ? m.players.map((p) => ({ slot: Number(p.slot), name: String(p.name ?? ""), race: Number(p.race) })) : [],
             map: { width: Number(m.map?.width) || 0, height: Number(m.map?.height) || 0 },
             rewinds: m.rewinds === true,
+            ...m.slow === true ? { slow: true } : {},
             looks: looksOf(m.looks ?? {}),
             follows: m.follows === true
           });
