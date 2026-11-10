@@ -625,6 +625,8 @@ export interface ViewFrame {
   playing: boolean;
   /** The frame a seek started from while it runs ahead, null otherwise. */
   seeking: number | null;
+  /** The frame a seek (or a restart's run) is going to, while one is under way; left out otherwise, and by a page from before it (0.19.2). */
+  target?: number;
 }
 
 /** Where the view looks, after it moved: its middle and the map it shows, in pixels. */

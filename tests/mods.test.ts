@@ -191,7 +191,7 @@ function fakeAnalysis(ready: Record<string, unknown>) {
   };
   return { page, host };
 }
-const BRIDGE_WORDS = { noAnswer: "no answer", noFiles: "no files", closed: "closed", noPathing: "no pathing", noMeasure: "no measure", noTests: "no tests", noCopies: "no copies", noDebug: "no debug", sessionOver: "session over", noFights: "no fights" };
+const BRIDGE_WORDS = { noAnswer: "no answer", noFiles: "no files", closed: "closed", noPathing: "no pathing", noMeasure: "no measure", noTests: "no tests", noCopies: "no copies", noDebug: "no debug", sessionOver: "session over", noFights: "no fights", reloading: "kept loading" };
 
 describe("the analysis takes a mod's files (0.19.0)", () => {
   it("hands the files with the first request, says the page's keeping, and the next goes without them", async () => {
@@ -257,6 +257,34 @@ describe("Test in Browser finds the open mod's files (0.19.0)", () => {
       ready({ kept: [HASH], plays: HASH });
       await tick();
       expect((tab.sent.at(-1) as { dataSet: Record<string, unknown> }).dataSet).toEqual({ id: "release", name: "release", hash: HASH });
+      play.dispose();
+    } finally { delete (globalThis as { window?: unknown }).window; }
+  });
+
+  it("hands them again to a page that said ready again without keeping the mod, not waiting for its own answer (0.19.2)", async () => {
+    const listeners: ((e: MessageEvent) => void)[] = [];
+    const tab = { closed: false, sent: [] as Record<string, unknown>[], location: { href: "", replace() {} }, postMessage(m: Record<string, unknown>) { tab.sent.push(m); }, focus() {} };
+    const win = { addEventListener: (_t: string, l: (e: MessageEvent) => void) => listeners.push(l), removeEventListener: () => {}, open: () => tab };
+    const say = (data: object) => { for (const l of listeners) l({ origin: "https://scmjs.dev", source: tab, data } as unknown as MessageEvent); };
+    const ready = (mods: object) => say({ type: "scmjs.play.ready", features: ["replayDoor", "liveSwitch", "modFiles"], mods });
+    (globalThis as { window?: unknown }).window = win;
+    try {
+      const sources = new ModSources();
+      sources.provide(HASH, { files: async () => [file("arr/units.dat")] });
+      const address = simAddress({ origin: "https://scmjs.dev", hostname: "scmjs.dev", pathname: "/editor/" })!;
+      const play = new PlayTab(address, { blocked: "blocked", noMap: "no map", replaced: "replaced" }, sources);
+      const started = play.play({ bytes: new Uint8Array([1]), name: "m.scx", dataSet: { id: "release", name: "release", hash: HASH } }, { useMapSettings: true, race: 1, computers: [] } as never);
+      await tick();
+      ready({ kept: [], plays: null });
+      await tick(); await tick();
+      expect(tab.sent.length).toBe(1);
+      // The page loads again before it kept the mod or answered: the map and the files go to the new page.
+      ready({ kept: [], plays: null });
+      await tick(); await tick(); await tick();
+      expect(tab.sent.length).toBe(2);
+      expect((tab.sent[1] as { dataSet: { files?: { path: string }[] } }).dataSet.files?.map((f) => f.path)).toEqual(["arr/units.dat"]);
+      say({ type: "scmjs.play.started" });
+      expect(await started).toBe("started");
       play.dispose();
     } finally { delete (globalThis as { window?: unknown }).window; }
   });

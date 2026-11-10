@@ -26,6 +26,10 @@
  * files and reloads), and the map is handed over again each time, for as long as that
  * tab is open. Playing again sends the new map to the same tab. A play page from before the
  * settings plays every map with its own settings and says "started".
+ *
+ * A mod's files handed over mark the mod as being kept until the tab answers (`ModSources.markKeeping`), so that
+ * another request for it waits; a page that says ready again before answering took them with it, and the keeping is
+ * over then (0.19.2): the hand-over again would otherwise wait for its own answer, which cannot come.
  */
 import type { LiveFile, LiveTest, ModSourceFile, ReplayDataSet } from "../contract";
 import { playAddress, type SimAddress } from "./address";
@@ -64,6 +68,8 @@ export class PlayTab {
   /** The answer the tab is waiting to give (resolved by `started`/`shown`, or rejected). */
   private answer: Promise<PlayOutcome> | null = null;
   private waiting: { resolve(outcome: PlayOutcome): void; reject(e: Error): void } | null = null;
+  /** Ends the keeping a hand-over with a mod's files marked: the page that took them loaded again (0.19.2). */
+  private keepingOver: (() => void) | null = null;
   private readonly address: SimAddress;
   private readonly words: PlayWords;
   private readonly heard = (e: MessageEvent) => {
@@ -72,7 +78,7 @@ export class PlayTab {
     if (!m || typeof m.type !== "string") return;
     if (this.live.heard(m as Record<string, unknown>)) return;
     // (Ready again is the page loaded again: what it was asked before is not coming.)
-    if (m.type === "scmjs.play.ready") { this.live.gone(); this.ready = true; this.said = featuresOf((m as { features?: unknown }).features); this.mods = pageModsOf((m as { mods?: unknown }).mods); this.sources?.note(this.mods); this.hand(); }
+    if (m.type === "scmjs.play.ready") { this.live.gone(); this.ready = true; this.said = featuresOf((m as { features?: unknown }).features); this.mods = pageModsOf((m as { mods?: unknown }).mods); this.sources?.note(this.mods); this.keepingOver?.(); this.keepingOver = null; this.hand(); }
     else if (m.type === "scmjs.play.started" || m.type === "scmjs.play.shown") { this.waiting?.resolve(m.type === "scmjs.play.shown" ? "shown" : "started"); this.waiting = null; }
     else if (m.type === "scmjs.play.error") { this.waiting?.reject(pageError(m)); this.waiting = null; }
   };
@@ -107,7 +113,12 @@ export class PlayTab {
     const tab = this.tab, answer = this.answer, hash = h.dataSet?.hash ?? "";
     void fetching.then((files) => {
       if (this.handing !== h || this.tab !== tab || !this.ready) return;
-      if (files && answer && /^[0-9a-f]{16}$/.test(hash)) this.sources?.markKeeping(hash, answer);
+      if (files && answer && /^[0-9a-f]{16}$/.test(hash) && this.sources) {
+        // (Until the tab answers, or says ready again: a new page, which is handed the files again unless it keeps the mod.)
+        this.keepingOver?.();
+        const over = new Promise<void>((resolve) => { this.keepingOver = resolve; });
+        this.sources.markKeeping(hash, Promise.race([answer, over]));
+      }
       this.post(h, files);
     }, (err) => { if (this.handing === h) { this.waiting?.reject(err instanceof Error ? err : new Error(String(err))); this.waiting = null; } });
   }

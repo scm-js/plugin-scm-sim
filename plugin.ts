@@ -49,6 +49,7 @@ export function activate(api: PluginApi): () => void {
     sessionOver: t("That debugging session is over."),
     noCopies: t("A test of several players runs a copy of the game for each, which needs memory shared between them: this browser does not allow that on the engine's page (Chrome and Edge from version 137 do), or the page is from before it."),
     noFights: t("The engine's page cannot play a fight again yet. Reload the editor and try again."),
+    reloading: t("The engine's page kept loading again before it could answer. Reload the editor and try again."),
   }, undefined, sources);
   const tab = address && new PlayTab(address, {
     blocked: t("The browser did not let the play page open. Allow pop-ups for this site and try again."),

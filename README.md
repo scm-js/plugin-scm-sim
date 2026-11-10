@@ -135,6 +135,12 @@ it, and say why they could not do something in a word as well as a sentence (see
 replay runs at a time, and further calls wait their turn. The engine uses about a gigabyte of
 memory while it runs and gives it back when the replay ends.
 
+If the engine's page loads again before it answers (since 0.19.2), the replay is handed to the
+new page and its progress starts over at `starting`. When the page loads again more than twice
+with it waiting, the promise rejects with a sentence that says so. The same goes for
+`pathing`, `measure`, `test`, `testCopies` and `fights`. A debugger's session whose game was on
+that page is over, as if closed.
+
 The answer is a `ReplayTimeline`:
 
 | Field | What it holds |
@@ -387,6 +393,9 @@ The rest of the view, in short (`contract.d.ts` has the details):
   how much of the map shows top to bottom, from 240 to 1920 pixels (960 before 0.9.0). It
   works only while the console is hidden, which it is unless you ask for
   `options({ console: true })`.
+- `onFrame` gives the frame shown, whether it plays, and while a seek runs, `seeking`. Since
+  0.19.2 it also gives `target`, the frame a seek (or a restart's run) is going to, while one is
+  under way; a page from before leaves it out.
 - `follow(track)` (since 0.6.0) moves the camera along a path for the whole game, in step
   with the frames the game draws. Use it for a smooth camera: frame reports come only ten
   times a second. Check `follows` on the loaded replay first.

@@ -35,6 +35,7 @@ export const KO: Record<string, string> = {
   "The game view cannot draw a debugged run yet. Reload the editor and try again.": "게임 보기가 아직 디버그 중인 실행을 그릴 수 없습니다. 편집기를 새로 고친 뒤 다시 시도하세요.",
   "A test of several players runs a copy of the game for each, which needs memory shared between them: this browser does not allow that on the engine's page (Chrome and Edge from version 137 do), or the page is from before it.": "여러 플레이어의 테스트는 플레이어마다 게임을 하나씩 실행하며, 이 게임들은 메모리를 공유해야 합니다. 이 브라우저는 엔진 페이지에서 이를 허용하지 않거나(Chrome과 Edge는 137 버전부터 허용합니다) 페이지가 그보다 오래되었습니다.",
   "The engine's page cannot play a fight again yet. Reload the editor and try again.": "엔진 페이지가 아직 전투를 다시 재생할 수 없습니다. 편집기를 새로 고친 뒤 다시 시도하세요.",
+  "The engine's page kept loading again before it could answer. Reload the editor and try again.": "엔진 페이지가 응답하기 전에 계속 다시 로드되었습니다. 편집기를 새로 고친 뒤 다시 시도하세요.",
   "Another replay was loaded in its place.": "그 자리에 다른 리플레이를 불러왔습니다.",
   "The game view was closed.": "게임 화면이 닫혔습니다.",
   "The engine's page did not answer.": "엔진 페이지가 응답하지 않았습니다.",
