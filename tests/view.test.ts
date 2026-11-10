@@ -155,6 +155,20 @@ describe("the game view inside an element", () => {
     await leftReplaced;
   });
 
+  it("hands the races a mod adds with its replay to a page that reads them, and to no page from before (0.20.0)", async () => {
+    const races = [{ id: 69, name: "Askosi", letter: "a", like: 1 as const }, { id: 3, name: "not a row" }];
+    for (const [features, sent] of [[["replayDoor", "liveSwitch", "modFiles", "races"], true], [["replayDoor", "liveSwitch"], false]] as const) {
+      const { page, host } = fakeViewer({ type: "scmjs.view.ready", version: 1, files: "copy", features });
+      const view = new ViewBridge("https://scmjs.dev/play/?view", element, host, WORDS);
+      const loaded = view.load(new Uint8Array([1]), "c.rep", { hash: "ac3f86533e4b5a31", live: true, races: races as never });
+      await tick(); await tick();
+      const load = page.sent.find((m) => m.type === "scmjs.view.load")!;
+      expect(load.dataSet).toEqual(sent ? { hash: "ac3f86533e4b5a31", live: true, races: [races[0]] } : undefined);
+      page.say({ ...LOADED, players: [{ slot: 0, name: "A", race: 69 }], races: [races[0]] });
+      await expect(loaded).resolves.toMatchObject({ players: [{ race: 69 }] });
+    }
+  });
+
   it("rejects a mod's load replaced while the page loaded at its address, or that the page did not answer there", async () => {
     const { page, host } = fakeViewer();
     const view = new ViewBridge("u", element, host, WORDS);

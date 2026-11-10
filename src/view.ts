@@ -215,6 +215,8 @@ export class ViewBridge implements ScmSimView {
     const message: Record<string, unknown> = { type: "scmjs.view.load", replay: replay.slice(), name };
     const said = analysedDataSet(dataSet), page = this.latest;
     let handing: string | null = null;
+    // (The data set named beside the replay, its races with it (0.20.0), to a page that reads it: the same hash as the address's.)
+    if (said && !this.sources && (page.features ?? []).includes("races")) message.dataSet = { ...said };
     if (said && this.sources && (page.features ?? []).includes("modFiles")) {
       const hash = said.hash, sent: Record<string, unknown> = { ...said };
       message.dataSet = sent;
