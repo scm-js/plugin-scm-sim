@@ -38,7 +38,7 @@ import { racesOf } from "./races";
 import { playAddress, type SimAddress } from "./address";
 import { LiveLink, type LiveWords } from "./live";
 import { featuresOf } from "./features";
-import { pageError, pageKeeps, pageModsOf, type ModSources, type PageMods } from "./mods";
+import { pageError, pageKeeps, pageModsOf, pagePath, type ModSources, type PageMods } from "./mods";
 import type { PlayHow } from "./settings";
 
 /** The window's name: one tab for playing, found again by the next call. (The scmjs.dev plugin's Test Map in Browser uses the same.) */
@@ -222,10 +222,10 @@ export class PlayTab {
   dispose() { window.removeEventListener("message", this.heard); this.waiting = null; this.live.gone(); }
 }
 
-/** A data set as the page takes it: its files as `File`s under the game's paths, forward slashes and lower case (a source, a function, is not sent). */
-function pageDataSet<T extends { files?: unknown }>(d: T): Omit<T, "files"> & { files?: { path: string; file: File }[] } {
+/** A data set as the page takes it: its files as `File`s under the game's paths, forward slashes, a game file's in lower case (`pagePath`; a source, a function, is not sent). */
+export function pageDataSet<T extends { files?: unknown }>(d: T): Omit<T, "files"> & { files?: { path: string; file: File }[] } {
   const { files, ...rest } = d;
-  return { ...rest, ...(Array.isArray(files) ? { files: (files as LiveFile[]).map((f) => ({ path: f.path.toLowerCase().replace(/\\/g, "/"), file: new File([f.bytes as Uint8Array<ArrayBuffer>], f.path.split(/[\\/]/).pop() || "file") })) } : {}) };
+  return { ...rest, ...(Array.isArray(files) ? { files: (files as LiveFile[]).map((f) => ({ path: pagePath(f.path), file: new File([f.bytes as Uint8Array<ArrayBuffer>], f.path.split(/[\\/]/).pop() || "file") })) } : {}) };
 }
 
 /**

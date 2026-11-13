@@ -100,3 +100,19 @@ describe("a replay handed to the play page's tab", () => {
     } finally { delete (globalThis as { window?: unknown }).window; }
   });
 });
+
+describe("a mod's files as the page is handed them (after 0.20.1)", () => {
+  it("lays a game file in lower case and keeps the names of the mod's code and of a program at the top", async () => {
+    const { pagePath } = await import("../src/mods");
+    const { pageDataSet } = await import("../src/play");
+    expect(pagePath("ARR\\Units.dat")).toBe("arr/units.dat");
+    expect(pagePath("plugins/Apply")).toBe("plugins/apply");
+    expect(pagePath("Firegraft/DataList.txt")).toBe("firegraft/datalist.txt");
+    expect(pagePath("plugins/GPTP.qdp")).toBe("plugins/GPTP.qdp");
+    expect(pagePath("plugins\\Alpha.dll")).toBe("plugins/Alpha.dll");
+    expect(pagePath("firegraft/Made BW.fgp")).toBe("firegraft/Made BW.fgp");
+    expect(pagePath("Made BW.exe")).toBe("Made BW.exe");
+    const set = pageDataSet({ id: "m", name: "Made BW", hash: "0123456789abcdef", files: [{ path: "Made BW.exe", bytes: new Uint8Array([77, 90]) }, { path: "UNIT\\X.grp", bytes: new Uint8Array([1]) }] });
+    expect(set.files!.map((f) => `${f.path} ${f.file.name}`)).toEqual(["Made BW.exe Made BW.exe", "unit/x.grp X.grp"]);
+  });
+});

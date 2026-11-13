@@ -37,13 +37,24 @@ export function pageError(m: { message?: unknown; reason?: unknown; hash?: unkno
   return e;
 }
 
+/**
+ * A mod's file's path as a page is handed it in the game's paths (0.21.0): forward slashes, a game file's in lower case.
+ * The mod's code keeps its own names — a module under `plugins/` or `firegraft/`, a program at the top that carries the
+ * mod's plugins (the Mod Editor hands a patcher exe so, to keep its loader's order) — as a dropped folder gives them: the
+ * page names the modules, and the mod after its program, by them.
+ */
+export function pagePath(path: string): string {
+  const p = path.replace(/\\/g, "/");
+  return !p.includes("/") || /^(plugins|firegraft)\/[^/]+\.(qdp|bwl|dll|fgp|fgd)$/i.test(p) ? p : p.toLowerCase();
+}
+
 /** Files as a page takes them: `File`s under the game's paths, forward slashes. */
 function asPageFiles(files: readonly (ModSourceFile | LiveFile)[]): ModSourceFile[] {
   return files.flatMap((f) => {
     if (!f || typeof f.path !== "string" || !f.path) return [];
     const path = f.path.replace(/\\/g, "/");
     if ("file" in f && typeof File !== "undefined" && f.file instanceof File) return [{ path, file: f.file }];
-    if ("bytes" in f && f.bytes instanceof Uint8Array && typeof File !== "undefined") return [{ path: path.toLowerCase(), file: new File([f.bytes as Uint8Array<ArrayBuffer>], path.split("/").pop() || "file") }];
+    if ("bytes" in f && f.bytes instanceof Uint8Array && typeof File !== "undefined") return [{ path: pagePath(path), file: new File([f.bytes as Uint8Array<ArrayBuffer>], path.split("/").pop() || "file") }];
     return [];
   });
 }

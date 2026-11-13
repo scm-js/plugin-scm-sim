@@ -331,6 +331,107 @@ describe("the game view inside an element", () => {
     expect((page.sent[0].track as typeof track).x).not.toBe(track.x);
   });
 
+  describe("the game's own screen", () => {
+    const OWN_READY = { type: "scmjs.view.ready", version: 1, files: "copy", features: ["replayDoor", "liveSwitch", "modFiles", "races", "ownScreen"] };
+    const OWN_LOOKS = { ...LOOKS, ownScreen: true, ownScreenOn: true };
+
+    it("says whether it is offered and on, in the loaded replay's looks and in every looks after, asked or not", async () => {
+      const { page, host } = fakeViewer(OWN_READY);
+      const view = new ViewBridge("u", element, host, WORDS);
+      expect((await view.ready).features).toContain("ownScreen");
+      const heard: unknown[] = [];
+      const listening = view.onLooks((l) => heard.push(l));
+      const loading = view.load(new Uint8Array([1]), "c.rep");
+      await tick();
+      page.say({ ...LOADED, looks: OWN_LOOKS });
+      expect((await loading).looks).toEqual(OWN_LOOKS);
+      // Turned off by the editor: sent, and answered with the looks.
+      const off = view.options({ ownScreen: false });
+      expect(page.sent.at(-1)).toEqual({ type: "scmjs.view.options", ownScreen: false });
+      page.say({ type: "scmjs.view.looks", ...OWN_LOOKS, ownScreenOn: false });
+      expect(await off).toEqual({ ...OWN_LOOKS, ownScreenOn: false });
+      // The page's default again: null is sent as it is.
+      void view.options({ ownScreen: null });
+      expect(page.sent.at(-1)).toEqual({ type: "scmjs.view.options", ownScreen: null });
+      page.say({ type: "scmjs.view.looks", ...OWN_LOOKS });
+      // Said by the page itself (its draw stopped): no request waits, the listeners hear it.
+      page.say({ type: "scmjs.view.looks", ...OWN_LOOKS, ownScreenOn: false });
+      expect(heard).toEqual([OWN_LOOKS, { ...OWN_LOOKS, ownScreenOn: false }, OWN_LOOKS, { ...OWN_LOOKS, ownScreenOn: false }]);
+      listening.dispose();
+      page.say({ type: "scmjs.view.looks", ...OWN_LOOKS });
+      expect(heard).toHaveLength(4);
+      // (A looks that says it is not offered says it is not on either, whatever else it says.)
+      const plain = view.load(new Uint8Array([2]), "p.rep");
+      await tick();
+      page.say({ ...LOADED, looks: { ...LOOKS, ownScreen: false, ownScreenOn: "yes" } });
+      expect((await plain).looks).toEqual({ ...LOOKS, ownScreen: false, ownScreenOn: false });
+    });
+
+    it("leaves it out of the looks of a page from before it", async () => {
+      const { page, host } = fakeViewer();
+      const view = new ViewBridge("u", element, host, WORDS);
+      const heard: unknown[] = [];
+      view.onLooks((l) => heard.push(l));
+      const loading = view.load(new Uint8Array([1]), "a.rep");
+      await tick();
+      page.say(LOADED);
+      const looks = (await loading).looks;
+      expect(looks).toEqual(LOOKS);
+      expect("ownScreen" in looks).toBe(false);
+      const asked = view.options({ fog: true });
+      page.say({ type: "scmjs.view.looks", ...LOOKS });
+      expect(await asked).toEqual(LOOKS);
+      expect(heard).toEqual([LOOKS, LOOKS]);
+    });
+
+    it("tells a page that loaded again the choice made, and nothing to a page that cannot show it", async () => {
+      const { page, host } = fakeViewer(OWN_READY);
+      const view = new ViewBridge("u", element, host, WORDS);
+      await view.ready;
+      // Never chosen: a page loading again is told nothing.
+      page.say(OWN_READY);
+      expect(page.sent).toEqual([]);
+      const off = view.options({ ownScreen: false });
+      page.say({ type: "scmjs.view.looks", ...LOOKS, ownScreen: false, ownScreenOn: false });
+      await off;
+      page.sent.length = 0;
+      page.say(OWN_READY);
+      expect(page.sent).toEqual([{ type: "scmjs.view.options", ownScreen: false }]);
+      // Asked and waiting across the load: sent once, with the rest waiting.
+      page.sent.length = 0;
+      void view.options({ ownScreen: true, sound: false });
+      page.say(OWN_READY);
+      expect(page.sent).toEqual([{ type: "scmjs.view.options", ownScreen: true, sound: false }, { type: "scmjs.view.options", ownScreen: true, sound: false }]);
+      page.say({ type: "scmjs.view.looks", ...OWN_LOOKS });
+      // A page that cannot show it (an older one at another address) is not told.
+      page.sent.length = 0;
+      page.say({ type: "scmjs.view.ready", version: 1, files: "copy", features: ["replayDoor"] });
+      expect(page.sent).toEqual([]);
+      // The page's default chosen again: nothing to tell a new page.
+      void view.options({ ownScreen: null });
+      page.say({ type: "scmjs.view.looks", ...OWN_LOOKS });
+      page.sent.length = 0;
+      page.say(OWN_READY);
+      expect(page.sent).toEqual([]);
+    });
+
+    it("tells the choice to the page at a mod's address before the replay goes in", async () => {
+      const { page, host } = fakeViewer(OWN_READY);
+      const view = new ViewBridge("https://scmjs.dev/play/?view", element, host, WORDS);
+      await view.ready;
+      const off = view.options({ ownScreen: false });
+      page.say({ type: "scmjs.view.looks", ...LOOKS, ownScreen: false, ownScreenOn: false });
+      await off;
+      page.sent.length = 0;
+      const loading = view.load(new Uint8Array([1]), "c.rep", { hash: "ac3f86533e4b5a31", live: true });
+      await tick(); await tick();
+      expect(page.sent.map((m) => m.type)).toEqual(["scmjs.view.options", "scmjs.view.load"]);
+      expect(page.sent[0]).toEqual({ type: "scmjs.view.options", ownScreen: false });
+      page.say({ ...LOADED, looks: { ...LOOKS, ownScreen: true, ownScreenOn: false } });
+      await expect(loading).resolves.toMatchObject({ looks: { ownScreen: true, ownScreenOn: false } });
+    });
+  });
+
   it("takes the frame away on dispose, rejects what was waiting and says nothing more", async () => {
     const { page, host } = fakeViewer();
     const view = new ViewBridge("u", element, host, WORDS);
