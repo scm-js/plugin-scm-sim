@@ -418,6 +418,30 @@ The rest of the view, in short (`contract.d.ts` has the details):
 - `onPointer` (since 0.10.0) gives the map pixel under the pointer, for the editor's status
   bar (`view.setPointer(p)`).
 
+### The game's own screen
+
+With a page whose `ready` features have `"ownScreen"`, the view can show the game's whole
+screen as the game draws it: its map, console, minimap and replay panel, and a mod's own
+interface, at the mod's own size, fitted into the element with bars. The page offers it where
+the replay's game runs the game's own code, which a replay of a mod whose code ran always does,
+and turns it on by itself for such a replay.
+
+- The looks (`load`'s, and every answer to `options`) say `ownScreen`, whether the replay
+  loaded can be shown so, and `ownScreenOn`, whether it is. A page from before says neither.
+- `onLooks` hears every looks the page says, including the ones it says by itself when the
+  game's own screen stops. Check that it exists: older versions of this plugin lack it.
+- `options({ ownScreen: false })` goes back to the page's own drawing, `true` asks for the
+  game's own screen, and `null` leaves it to the page again. The choice holds for the replays
+  loaded after it, and the view tells it again to the page whenever the page loads again.
+
+While it is on, the pointer and the wheel over the view are the game's; the keys are still
+handed back (`onKey`). `onHover` and `onPointer` say null and `onWheel` says nothing. The
+fog and `player` change nothing in the picture, the `height` of `camera` waits until it is
+off, and `onCamera`'s width and height are the map the game's screen shows at one to one (a
+mod that draws the world at its own scale shows less of it). Anything drawn over the view at
+map positions lands in the wrong place. Play, speed, seek, the camera, tracks, the minimap's
+squares, sounds and music work as before.
+
 ### Mods the engine has not got
 
 Since 0.19.0, with a page whose `features` has `"modFiles"`.

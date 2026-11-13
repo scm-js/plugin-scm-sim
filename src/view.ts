@@ -5,7 +5,7 @@
  *   ← `{ type: "scmjs.view.ready", version, files, why?, features? }` the page, once it has looked for the game's files
  *   → `{ type: "scmjs.view.load", replay, name }`                 ← `loaded {…}` or `error {message}`
  *   → `play {playing}`, `speed {multiplier}`, `seek {frame}`, `camera {x, y}`, `follow {track}`, `player {slot}`
- *   → `options {fog?, sound?, volume?, music?, duck?, remastered?, lighting?, console?}`   ← `looks {…}`
+ *   → `options {fog?, sound?, volume?, music?, duck?, remastered?, lighting?, console?, ownScreen?}`   ← `looks {…}` (also unasked)
  *   ← `frame {frame, playing, seeking, target?}`, `camera {x, y, width, height, byUser}`, `key {key, code, …}`
  *   → `debug {map}` (a page whose `ready` says `debug`)          ← `debugged {map}` or `error {message}`
  *   → `show {kept}`                                              ← `shown {frame}`, or `error {message}` (said to `onError`)
@@ -26,6 +26,11 @@
  *
  * What the page does not take across a load of its own, a debugged run's map and options waiting for their looks, is
  * sent again when it says ready again (0.19.2): the new page knows nothing of them, and they would wait for ever.
+ *
+ * The game's own screen (a page whose `ready` says "ownScreen"): `options {ownScreen}` chooses it, the looks say whether
+ * it is offered for the replay loaded and whether it is on (`ownScreen`, `ownScreenOn`; a page from before says
+ * neither, and they are left out), and every looks the page says goes to `onLooks`. The choice made is told again to
+ * every page that says ready after it, as the page keeps it only for as long as it stays loaded.
  */
 import type { Disposable, ReplayDataSet, ScmSimPicture, ScmSimView, ViewCamera, ViewFrame, ViewHover, ViewHoverUnit, ViewKey, ViewKeeping, ViewLooks, ViewOptions, ViewPointer, ViewReady, ViewTrack, ViewUnits, ViewWheel, ViewedReplay } from "../contract";
 import { viewAddress } from "./address";
@@ -56,7 +61,11 @@ type Listener<T> = (value: T) => void;
 
 const files = (v: unknown): ViewReady["files"] => (v === "archives" || v === "copy" || v === "server" ? v : null);
 
-const looksOf = (m: Record<string, unknown>): ViewLooks => ({ remastered: m.remastered === true, remasteredOn: m.remasteredOn === true, lighting: m.lighting === true, lightingOn: m.lightingOn === true });
+/** The looks as the contract has them: the game's own screen only where the page said it (a page from before says nothing of it). */
+const looksOf = (m: Record<string, unknown>): ViewLooks => ({
+  remastered: m.remastered === true, remasteredOn: m.remasteredOn === true, lighting: m.lighting === true, lightingOn: m.lightingOn === true,
+  ...(typeof m.ownScreen === "boolean" ? { ownScreen: m.ownScreen, ownScreenOn: m.ownScreenOn === true } : {}),
+});
 
 export class ViewBridge implements ScmSimView {
   readonly ready: Promise<ViewReady>;
@@ -70,9 +79,12 @@ export class ViewBridge implements ScmSimView {
   private debugMap: Uint8Array | null = null;
   /** The options waiting for their looks, together: sent again to a page that loaded again (0.19.2). */
   private asked: ViewOptions | null = null;
+  /** The game's own screen as last chosen (`options`; undefined: never), told again to a page that loaded again. */
+  private ownAsked: boolean | null | undefined = undefined;
   private readonly errors = new Set<Listener<string>>();
   private readonly shown = new Set<Listener<number>>();
   private readonly looksWaiting: ((l: ViewLooks) => void)[] = [];
+  private readonly looksHeard = new Set<Listener<ViewLooks>>();
   private readonly frames = new Set<Listener<ViewFrame>>();
   private readonly cameras = new Set<Listener<ViewCamera>>();
   private readonly keys = new Set<Listener<ViewKey>>();
@@ -121,19 +133,24 @@ export class ViewBridge implements ScmSimView {
           // A replay's load is answered by the new page when it loaded again for it; a debugged run's map and options
           // waiting for their looks are not, and go again (0.19.2).
           if (this.debugging && this.debugMap) this.frame.post({ type: "scmjs.view.debug", map: this.debugMap.slice() });
-          if (this.looksWaiting.length && this.asked) this.frame.post({ type: "scmjs.view.options", ...this.asked });
+          const again = this.looksWaiting.length && this.asked ? this.asked : null;
+          if (again) this.frame.post({ type: "scmjs.view.options", ...again });
+          // The game's own screen as chosen: the new page knows nothing of it (a page from before is never told).
+          if (typeof this.ownAsked === "boolean" && again?.ownScreen === undefined && (r.features ?? []).includes("ownScreen")) this.frame.post({ type: "scmjs.view.options", ownScreen: this.ownAsked });
           return;
         }
         case "scmjs.view.loaded": {
           const l = this.loading;
           this.loading = null;
+          const looks = looksOf((m.looks ?? {}) as Record<string, unknown>);
+          for (const h of this.looksHeard) h(looks);
           l?.resolve({
             name: String(m.name ?? ""), frames: Number(m.frames) || 0,
             players: Array.isArray(m.players) ? (m.players as { slot: number; name: string; race: number }[]).map((p) => ({ slot: Number(p.slot), name: String(p.name ?? ""), race: Number(p.race) })) : [],
             map: { width: Number((m.map as { width?: unknown } | undefined)?.width) || 0, height: Number((m.map as { height?: unknown } | undefined)?.height) || 0 },
             rewinds: m.rewinds === true,
             ...(m.slow === true ? { slow: true } : {}),
-            looks: looksOf((m.looks ?? {}) as Record<string, unknown>),
+            looks,
             follows: m.follows === true,
           });
           return;
@@ -159,7 +176,7 @@ export class ViewBridge implements ScmSimView {
           return;
         }
         case "scmjs.view.shown": { const f = Number(m.frame) || 0; for (const l of this.shown) l(f); return; }
-        case "scmjs.view.looks": { const l = looksOf(m); this.asked = null; for (const w of this.looksWaiting.splice(0)) w(l); return; }
+        case "scmjs.view.looks": { const l = looksOf(m); this.asked = null; for (const w of this.looksWaiting.splice(0)) w(l); for (const h of this.looksHeard) h(l); return; }
         case "scmjs.view.frame": {
           // (`target`, 0.19.2: where a seek or a restart's run is going, a finite number only.)
           const f: ViewFrame = { frame: Number(m.frame) || 0, playing: m.playing === true, seeking: typeof m.seeking === "number" ? m.seeking : null, ...(typeof m.target === "number" && Number.isFinite(m.target) ? { target: m.target } : {}) };
@@ -303,6 +320,7 @@ export class ViewBridge implements ScmSimView {
   player(slot: number): void { this.tell({ type: "scmjs.view.player", slot }); }
   options(o: ViewOptions): Promise<ViewLooks> {
     if (this.closed) return Promise.reject(new Error(this.words.closed));
+    if (o.ownScreen !== undefined) this.ownAsked = o.ownScreen;
     return new Promise<ViewLooks>((resolve) => {
       this.looksWaiting.push(resolve);
       this.asked = { ...this.asked, ...o };
@@ -322,6 +340,7 @@ export class ViewBridge implements ScmSimView {
   onWheel(listener: Listener<ViewWheel>): Disposable { return this.listen(this.wheels, listener); }
   onPointer(listener: Listener<ViewPointer | null>): Disposable { return this.listen(this.pointers, listener); }
   onKeeping(listener: Listener<ViewKeeping>): Disposable { return this.listen(this.keepings, listener); }
+  onLooks(listener: Listener<ViewLooks>): Disposable { return this.listen(this.looksHeard, listener); }
 
   dispose(): void {
     if (this.closed) return;
@@ -335,7 +354,7 @@ export class ViewBridge implements ScmSimView {
     this.asked = null;
     for (const w of this.readyAgain.splice(0)) w(null);
     this.errors.clear(); this.shown.clear();
-    this.frames.clear(); this.cameras.clear(); this.keys.clear(); this.units.clear(); this.hovers.clear(); this.wheels.clear(); this.pointers.clear(); this.keepings.clear();
+    this.frames.clear(); this.cameras.clear(); this.keys.clear(); this.units.clear(); this.hovers.clear(); this.wheels.clear(); this.pointers.clear(); this.keepings.clear(); this.looksHeard.clear();
     this.frame.remove();
   }
 }
