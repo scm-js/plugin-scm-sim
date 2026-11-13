@@ -73,12 +73,16 @@ function pageError(m) {
   if (e.reason && typeof m.hash === "string" && HASH.test(m.hash)) e.hash = m.hash;
   return e;
 }
+function pagePath(path) {
+  const p = path.replace(/\\/g, "/");
+  return !p.includes("/") || /^(plugins|firegraft)\/[^/]+\.(qdp|bwl|dll|fgp|fgd)$/i.test(p) ? p : p.toLowerCase();
+}
 function asPageFiles(files2) {
   return files2.flatMap((f) => {
     if (!f || typeof f.path !== "string" || !f.path) return [];
     const path = f.path.replace(/\\/g, "/");
     if ("file" in f && typeof File !== "undefined" && f.file instanceof File) return [{ path, file: f.file }];
-    if ("bytes" in f && f.bytes instanceof Uint8Array && typeof File !== "undefined") return [{ path: path.toLowerCase(), file: new File([f.bytes], path.split("/").pop() || "file") }];
+    if ("bytes" in f && f.bytes instanceof Uint8Array && typeof File !== "undefined") return [{ path: pagePath(path), file: new File([f.bytes], path.split("/").pop() || "file") }];
     return [];
   });
 }
@@ -542,7 +546,13 @@ function withDataSet(set) {
 
 // src/view.ts
 var files = (v) => v === "archives" || v === "copy" || v === "server" ? v : null;
-var looksOf = (m) => ({ remastered: m.remastered === true, remasteredOn: m.remasteredOn === true, lighting: m.lighting === true, lightingOn: m.lightingOn === true });
+var looksOf = (m) => ({
+  remastered: m.remastered === true,
+  remasteredOn: m.remasteredOn === true,
+  lighting: m.lighting === true,
+  lightingOn: m.lightingOn === true,
+  ...typeof m.ownScreen === "boolean" ? { ownScreen: m.ownScreen, ownScreenOn: m.ownScreenOn === true } : {}
+});
 var ViewBridge = class {
   ready;
   frame;
@@ -555,9 +565,12 @@ var ViewBridge = class {
   debugMap = null;
   /** The options waiting for their looks, together: sent again to a page that loaded again (0.19.2). */
   asked = null;
+  /** The game's own screen as last chosen (`options`; undefined: never), told again to a page that loaded again. */
+  ownAsked = void 0;
   errors = /* @__PURE__ */ new Set();
   shown = /* @__PURE__ */ new Set();
   looksWaiting = [];
+  looksHeard = /* @__PURE__ */ new Set();
   frames = /* @__PURE__ */ new Set();
   cameras = /* @__PURE__ */ new Set();
   keys = /* @__PURE__ */ new Set();
@@ -605,12 +618,16 @@ var ViewBridge = class {
           answered(r);
           for (const w of this.readyAgain.splice(0)) w(r);
           if (this.debugging && this.debugMap) this.frame.post({ type: "scmjs.view.debug", map: this.debugMap.slice() });
-          if (this.looksWaiting.length && this.asked) this.frame.post({ type: "scmjs.view.options", ...this.asked });
+          const again = this.looksWaiting.length && this.asked ? this.asked : null;
+          if (again) this.frame.post({ type: "scmjs.view.options", ...again });
+          if (typeof this.ownAsked === "boolean" && again?.ownScreen === void 0 && (r.features ?? []).includes("ownScreen")) this.frame.post({ type: "scmjs.view.options", ownScreen: this.ownAsked });
           return;
         }
         case "scmjs.view.loaded": {
           const l = this.loading;
           this.loading = null;
+          const looks = looksOf(m.looks ?? {});
+          for (const h of this.looksHeard) h(looks);
           l?.resolve({
             name: String(m.name ?? ""),
             frames: Number(m.frames) || 0,
@@ -618,7 +635,7 @@ var ViewBridge = class {
             map: { width: Number(m.map?.width) || 0, height: Number(m.map?.height) || 0 },
             rewinds: m.rewinds === true,
             ...m.slow === true ? { slow: true } : {},
-            looks: looksOf(m.looks ?? {}),
+            looks,
             follows: m.follows === true
           });
           return;
@@ -656,6 +673,7 @@ var ViewBridge = class {
           const l = looksOf(m);
           this.asked = null;
           for (const w of this.looksWaiting.splice(0)) w(l);
+          for (const h of this.looksHeard) h(l);
           return;
         }
         case "scmjs.view.frame": {
@@ -829,6 +847,7 @@ var ViewBridge = class {
   }
   options(o) {
     if (this.closed) return Promise.reject(new Error(this.words.closed));
+    if (o.ownScreen !== void 0) this.ownAsked = o.ownScreen;
     return new Promise((resolve) => {
       this.looksWaiting.push(resolve);
       this.asked = { ...this.asked, ...o };
@@ -865,6 +884,9 @@ var ViewBridge = class {
   onKeeping(listener) {
     return this.listen(this.keepings, listener);
   }
+  onLooks(listener) {
+    return this.listen(this.looksHeard, listener);
+  }
   dispose() {
     if (this.closed) return;
     this.closed = true;
@@ -886,6 +908,7 @@ var ViewBridge = class {
     this.wheels.clear();
     this.pointers.clear();
     this.keepings.clear();
+    this.looksHeard.clear();
     this.frame.remove();
   }
 };
@@ -1726,7 +1749,7 @@ var PlayTab = class {
 };
 function pageDataSet(d) {
   const { files: files2, ...rest } = d;
-  return { ...rest, ...Array.isArray(files2) ? { files: files2.map((f) => ({ path: f.path.toLowerCase().replace(/\\/g, "/"), file: new File([f.bytes], f.path.split(/[\\/]/).pop() || "file") })) } : {} };
+  return { ...rest, ...Array.isArray(files2) ? { files: files2.map((f) => ({ path: pagePath(f.path), file: new File([f.bytes], f.path.split(/[\\/]/).pop() || "file") })) } : {} };
 }
 function validReplayDataSet(set) {
   if (!set || typeof set !== "object") return null;
